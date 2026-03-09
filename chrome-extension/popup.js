@@ -102,7 +102,14 @@ function setStatus(text, type) {
 function showProductInfo(info) {
   productInfoDiv.style.display = 'block';
   productTitle.textContent = info.title.substring(0, 60) + (info.title.length > 60 ? '...' : '');
-  productAsin.textContent = `ASIN: ${info.asin} | ★${info.rating} | ${info.totalReviews}件のレビュー`;
+  productAsin.textContent = `ASIN: ${info.asin} | ★${info.rating}`;
+
+  // 評価数の内訳を表示
+  const breakdownDiv = document.getElementById('reviewBreakdown');
+  const totalRatingsEl = document.getElementById('totalRatings');
+  const textReviewsEl = document.getElementById('textReviews');
+  breakdownDiv.style.display = 'block';
+  totalRatingsEl.textContent = `${info.totalReviews}件`;
 }
 
 // レビュー取得開始
@@ -144,6 +151,15 @@ chrome.runtime.onMessage.addListener((msg) => {
     setStatus(`レビュー取得中... (${msg.total}件)`, 'collecting');
   }
 
+  if (msg.type === 'TEXT_REVIEW_COUNT') {
+    const textReviewsEl = document.getElementById('textReviews');
+    textReviewsEl.textContent = `${msg.textReviewCount}件`;
+    textReviewsEl.style.color = msg.textReviewCount < 10 ? '#ef4444' : '#3b82f6';
+    if (msg.textReviewCount < 10) {
+      setStatus(`コメント付きレビューが${msg.textReviewCount}件しかありません。分析精度が低くなる可能性があります`, 'error');
+    }
+  }
+
   if (msg.type === 'COLLECTION_COMPLETE') {
     stopBtn.style.display = 'none';
     reviewCount.textContent = `${msg.reviews.length}件`;
@@ -151,6 +167,7 @@ chrome.runtime.onMessage.addListener((msg) => {
     progressText.textContent = '取得完了';
     setStatus(`${msg.reviews.length}件のレビューを取得しました`, 'success');
     analyzeBtn.style.display = 'block';
+    resetBtn.style.display = 'block';
     currentProductInfo = msg.productInfo;
   }
 });
@@ -209,6 +226,19 @@ analyzeBtn.addEventListener('click', async () => {
     analyzeBtn.disabled = false;
     analyzeBtn.textContent = 'POX分析を実行する';
   }
+});
+
+// データリセット
+const resetBtn = document.getElementById('resetBtn');
+resetBtn.addEventListener('click', () => {
+  chrome.storage.local.remove(['reviewai_state'], () => {
+    setStatus('データをリセットしました', 'info');
+    progressSection.style.display = 'none';
+    analyzeBtn.style.display = 'none';
+    stopBtn.style.display = 'none';
+    resetBtn.style.display = 'none';
+    startBtn.style.display = 'block';
+  });
 });
 
 init();

@@ -102,8 +102,32 @@
 
   // 次のページのURLを取得
   function getNextPageUrl() {
-    const nextBtn = document.querySelector('.a-pagination .a-last:not(.a-disabled) a, li.a-last:not(.a-disabled) a');
-    return nextBtn ? nextBtn.href : null;
+    // 複数のセレクタを試す
+    const selectors = [
+      '.a-pagination .a-last:not(.a-disabled) a',
+      'li.a-last:not(.a-disabled) a',
+      '.a-pagination li.a-last a',
+      'ul.a-pagination li:last-child a',
+    ];
+    for (const sel of selectors) {
+      const el = document.querySelector(sel);
+      if (el && el.href) {
+        console.log(`[ReviewAI] Next page found via: ${sel} -> ${el.href}`);
+        return el.href;
+      }
+    }
+    // デバッグ: ページネーション要素の状態を出力
+    const pagination = document.querySelector('.a-pagination, ul.a-pagination');
+    if (pagination) {
+      console.log(`[ReviewAI] Pagination HTML:`, pagination.innerHTML.substring(0, 500));
+      const lastLi = pagination.querySelector('li.a-last, li:last-child');
+      if (lastLi) {
+        console.log(`[ReviewAI] Last li classes: ${lastLi.className}, disabled: ${lastLi.classList.contains('a-disabled')}`);
+      }
+    } else {
+      console.log('[ReviewAI] No pagination element found on page');
+    }
+    return null;
   }
 
   // レビューページかどうか
@@ -134,6 +158,25 @@
     });
   }
 
+  // レビューページからテキスト付きレビュー総数を取得
+  function getTextReviewCount() {
+    // "○○件中1-10件のレビューを表示" or "Showing 1-10 of ○○ reviews"
+    const filterInfo = document.querySelector('[data-hook="cr-filter-info-review-rating-count"], .a-row.a-spacing-base .a-size-base');
+    if (filterInfo) {
+      // 日本語: "1,234件中" / 英語: "of 1,234 reviews"
+      const text = filterInfo.textContent;
+      const match = text.match(/([\d,]+)\s*件中/) || text.match(/of\s+([\d,]+)/);
+      if (match) return parseInt(match[1].replace(/,/g, ''));
+    }
+    // ページネーションの最後のページ番号 × 10 で概算
+    const lastPage = document.querySelector('.a-pagination li:nth-last-child(2) a');
+    if (lastPage) {
+      const pageNum = parseInt(lastPage.textContent);
+      if (!isNaN(pageNum)) return pageNum * 10;
+    }
+    return null;
+  }
+
   // レビューページに到着した時の処理（自動巡回モード）
   async function handleReviewsPageArrival() {
     const state = await loadCollectionState();
@@ -143,6 +186,20 @@
 
     // 少し待ってDOMが完全にロードされるのを待つ
     await new Promise((resolve) => setTimeout(resolve, 1500));
+
+    // 初回ページでテキスト付きレビュー数を取得
+    if (state.phase === 'all' && state.currentPage === 1 && !state.textReviewCount) {
+      const textCount = getTextReviewCount();
+      if (textCount !== null) {
+        state.textReviewCount = textCount;
+        console.log(`[ReviewAI] Text reviews (with comments): ${textCount}, Total ratings: ${state.productInfo?.totalReviews || '?'}`);
+        chrome.runtime.sendMessage({
+          type: 'TEXT_REVIEW_COUNT',
+          textReviewCount: textCount,
+          totalRatings: state.productInfo?.totalReviews || 0,
+        }).catch(() => {});
+      }
+    }
 
     // 現在のページからレビューを取得
     const pageReviews = extractReviewsFromCurrentPage();
@@ -171,14 +228,20 @@
       currentFilter: state.phase === 'all' ? '全て' : state.phase,
     }).catch(() => {});
 
-    // 次のページがあるか確認
-    const nextUrl = getNextPageUrl();
+    // 次のページへ進むか判定
     const maxPages = 10;
+    const hasNextPage = !!document.querySelector('.a-pagination .a-last:not(.a-disabled) a, li.a-last:not(.a-disabled) a');
+    const nextPageNum = state.currentPage; // currentPageは既にインクリメント済み（=次のページ番号）
+    const asin = extractAsin();
+    const domain = window.location.hostname;
+    const filterParam = state.phase === 'all' ? '' : `&filterByStar=${state.phase}`;
+    const nextUrl = `https://${domain}/product-reviews/${asin}?pageNumber=${nextPageNum}&sortBy=recent${filterParam}`;
 
-    if (nextUrl && state.currentPage <= maxPages && addedCount > 0) {
-      // 次のページへ遷移
+    console.log(`[ReviewAI] Pagination check: hasNext=${hasNextPage}, nextPage=${nextPageNum}, maxPages=${maxPages}, pageReviews=${pageReviews.length}, newReviews=${addedCount}`);
+    if (hasNextPage && nextPageNum <= maxPages && addedCount > 0) {
+      // 次のページへ遷移（URLを自前構築）
       await saveCollectionState(state);
-      console.log(`[ReviewAI] Navigating to next page: ${nextUrl}`);
+      console.log(`[ReviewAI] Navigating to page ${nextPageNum}: ${nextUrl}`);
       await new Promise((resolve) => setTimeout(resolve, 1000 + Math.random() * 1000));
       window.location.href = nextUrl;
     } else {

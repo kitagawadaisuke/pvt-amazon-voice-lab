@@ -130,6 +130,16 @@
   <div id="productInfo" class="product-info" style="display:none;">
     <div class="title" id="productTitle"></div>
     <div class="asin" id="productAsin"></div>
+    <div id="reviewBreakdown" style="display:none; margin-top:8px; padding:8px; background:#0f172a; border-radius:6px; font-size:12px;">
+      <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
+        <span style="color:#94a3b8;">総評価数（星のみ含む）</span>
+        <span style="color:#e2e8f0; font-weight:600;" id="totalRatings">-</span>
+      </div>
+      <div style="display:flex; justify-content:space-between;">
+        <span style="color:#94a3b8;">コメント付きレビュー数</span>
+        <span style="color:#3b82f6; font-weight:600;" id="textReviews">取得開始後に判明</span>
+      </div>
+    </div>
   </div>
 
   <div id="progressSection" style="display:none;">
@@ -145,6 +155,7 @@
   <button id="startBtn" class="btn-primary" style="display:none;">レビューを取得する</button>
   <button id="stopBtn" class="btn-stop" style="display:none;">取得を中止</button>
   <button id="analyzeBtn" class="btn-analyze" style="display:none;">POX分析を実行する</button>
+  <button id="resetBtn" style="display:none; width:100%; padding:6px; border:1px solid #475569; border-radius:6px; background:transparent; color:#94a3b8; font-size:12px; cursor:pointer; margin-top:8px;">データをリセット</button>
 
   <div class="settings">
     <label>ReviewAI サーバーURL</label>
