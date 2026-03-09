@@ -52,7 +52,7 @@ export async function fetchReviews(asin: string): Promise<ReviewCollection> {
       title: (r.title as string) || '(タイトルなし)',
       body: (r.body as string) || '',
       rating: (r.rating as number) || 3,
-      date: (r.date?.raw as string) || new Date().toISOString().split('T')[0],
+      date: ((r.date as Record<string, unknown>)?.raw as string) || new Date().toISOString().split('T')[0],
       verified: (r.verified_purchase as boolean) || false,
       helpfulVotes: (r.helpful_votes as number) || 0,
     })).filter((r: AmazonReview) => r.body)

@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      width: 360px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #0f172a;
+      color: #e2e8f0;
+      padding: 16px;
+    }
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+    .header h1 {
+      font-size: 18px;
+      background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .status {
+      padding: 12px;
+      border-radius: 8px;
+      margin-bottom: 12px;
+      font-size: 13px;
+    }
+    .status.info { background: #1e293b; border: 1px solid #334155; }
+    .status.success { background: #064e3b; border: 1px solid #059669; }
+    .status.error { background: #450a0a; border: 1px solid #dc2626; }
+    .status.collecting { background: #1e1b4b; border: 1px solid #6366f1; }
+    .product-info {
+      background: #1e293b;
+      border-radius: 8px;
+      padding: 12px;
+      margin-bottom: 12px;
+      font-size: 13px;
+    }
+    .product-info .title { font-weight: 600; margin-bottom: 4px; }
+    .product-info .asin { color: #94a3b8; font-size: 12px; }
+    .progress {
+      margin-bottom: 12px;
+    }
+    .progress-bar {
+      height: 6px;
+      background: #334155;
+      border-radius: 3px;
+      overflow: hidden;
+    }
+    .progress-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #3b82f6, #8b5cf6);
+      border-radius: 3px;
+      transition: width 0.3s;
+    }
+    .progress-text {
+      font-size: 12px;
+      color: #94a3b8;
+      margin-top: 4px;
+    }
+    button {
+      width: 100%;
+      padding: 10px;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.2s;
+    }
+    button:hover { opacity: 0.9; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-primary {
+      background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+      color: white;
+    }
+    .btn-analyze {
+      background: linear-gradient(135deg, #059669, #10b981);
+      color: white;
+      margin-top: 8px;
+    }
+    .btn-stop {
+      background: #dc2626;
+      color: white;
+    }
+    .review-count {
+      font-size: 24px;
+      font-weight: 700;
+      text-align: center;
+      margin: 8px 0;
+      background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .settings {
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid #334155;
+    }
+    .settings label {
+      font-size: 12px;
+      color: #94a3b8;
+      display: block;
+      margin-bottom: 4px;
+    }
+    .settings input {
+      width: 100%;
+      padding: 8px;
+      border-radius: 6px;
+      border: 1px solid #334155;
+      background: #1e293b;
+      color: #e2e8f0;
+      font-size: 13px;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>📊 ReviewAI</h1>
+  </div>
+
+  <div id="statusBox" class="status info">
+    Amazon商品ページを開いてください
+  </div>
+
+  <div id="productInfo" class="product-info" style="display:none;">
+    <div class="title" id="productTitle"></div>
+    <div class="asin" id="productAsin"></div>
+  </div>
+
+  <div id="progressSection" style="display:none;">
+    <div class="review-count" id="reviewCount">0件</div>
+    <div class="progress">
+      <div class="progress-bar">
+        <div class="progress-fill" id="progressFill" style="width:0%"></div>
+      </div>
+      <div class="progress-text" id="progressText">取得中...</div>
+    </div>
+  </div>
+
+  <button id="startBtn" class="btn-primary" style="display:none;">レビューを取得する</button>
+  <button id="stopBtn" class="btn-stop" style="display:none;">取得を中止</button>
+  <button id="analyzeBtn" class="btn-analyze" style="display:none;">POX分析を実行する</button>
+
+  <div class="settings">
+    <label>ReviewAI サーバーURL</label>
+    <input type="text" id="serverUrl" placeholder="http://localhost:3000" />
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
