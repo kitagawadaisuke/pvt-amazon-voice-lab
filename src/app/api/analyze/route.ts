@@ -30,6 +30,9 @@ export async function POST(request: NextRequest) {
         lowRatingReviews: extensionReviews.lowRatingReviews || [],
         highRatingReviews: extensionReviews.highRatingReviews || [],
         fetchedAt: extensionReviews.fetchedAt,
+        fetchedCount: extensionReviews.fetchedCount || (extensionReviews.reviews || []).length,
+        source: extensionReviews.source || 'mock',
+        warnings: extensionReviews.warnings || [],
       }
 
       console.log(`Chrome拡張からレビュー受信: ${reviewCollection.reviews.length}件 (low: ${reviewCollection.lowRatingReviews.length}, high: ${reviewCollection.highRatingReviews.length})`)
@@ -79,12 +82,17 @@ export async function POST(request: NextRequest) {
         averageRating: reviews.averageRating,
         lowRatingCount: reviews.lowRatingReviews.length,
         highRatingCount: reviews.highRatingReviews.length,
-        source: 'api',
+        fetchedCount: reviews.fetchedCount,
+        source: reviews.source,
+        warnings: reviews.warnings,
       },
     }, { headers: corsHeaders })
   } catch (error) {
     console.error('Analysis error:', error)
-    return NextResponse.json({ error: '分析に失敗しました' }, { status: 500, headers: corsHeaders })
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : '分析に失敗しました' },
+      { status: 500, headers: corsHeaders }
+    )
   }
 }
 

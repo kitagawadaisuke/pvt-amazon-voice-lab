@@ -1,5 +1,8 @@
+import { load } from 'cheerio'
+import type { AnyNode } from 'domhandler'
+
 // Amazon Review Scraper Service
-// Rainforest API でAmazonレビューを構造化データとして取得
+// provider を切り替えて Amazon レビューを構造化データに正規化する
 
 export interface AmazonReview {
   title: string
@@ -9,6 +12,8 @@ export interface AmazonReview {
   verified: boolean
   helpfulVotes: number
 }
+
+export type ReviewSource = 'rainforest' | 'scraperapi' | 'mock'
 
 export interface ReviewCollection {
   asin: string
@@ -20,74 +25,309 @@ export interface ReviewCollection {
   lowRatingReviews: AmazonReview[]
   highRatingReviews: AmazonReview[]
   fetchedAt: string
+  fetchedCount: number
+  source: ReviewSource
+  warnings: string[]
+}
+
+class ReviewFetchError extends Error {
+  provider: ReviewSource | 'unknown'
+
+  constructor(message: string, provider: ReviewSource | 'unknown' = 'unknown') {
+    super(message)
+    this.name = 'ReviewFetchError'
+    this.provider = provider
+  }
+}
+
+type ReviewProvider = ReviewSource
+
+interface ParsedReviewPage {
+  productName?: string
+  totalReviews?: number
+  averageRating?: number
+  reviews: AmazonReview[]
+  hasNextPage: boolean
 }
 
 const RAINFOREST_API_KEY = process.env.RAINFOREST_API_KEY
+const SCRAPERAPI_KEY = process.env.SCRAPERAPI_KEY
+const REVIEW_PROVIDER = process.env.REVIEW_PROVIDER?.toLowerCase()
+const REVIEW_MAX_PAGES = parsePositiveInt(process.env.REVIEW_MAX_PAGES, 10)
+const REVIEW_REQUEST_TIMEOUT_MS = parsePositiveInt(process.env.REVIEW_REQUEST_TIMEOUT_MS, 30000)
+const REVIEW_REQUEST_RETRIES = parsePositiveInt(process.env.REVIEW_REQUEST_RETRIES, 3)
+const REVIEW_REQUEST_DELAY_MS = parsePositiveInt(process.env.REVIEW_REQUEST_DELAY_MS, 1200)
 
 /**
  * ASINからAmazonレビューを取得する
- * Rainforest API の product エンドポイントで top_reviews を取得
  */
 export async function fetchReviews(asin: string): Promise<ReviewCollection> {
-  if (!RAINFOREST_API_KEY) {
-    console.log('RAINFOREST_API_KEY not set, using mock data')
+  const provider = resolveProvider()
+
+  if (provider === 'mock') {
     return generateMockReviews(asin)
   }
 
   try {
-    const url = `https://api.rainforestapi.com/request?api_key=${RAINFOREST_API_KEY}&type=product&asin=${asin}&amazon_domain=amazon.co.jp`
-
-    const res = await fetch(url, { signal: AbortSignal.timeout(30000) })
-    if (!res.ok) throw new Error(`Rainforest API error: ${res.status}`)
-
-    const data = await res.json()
-
-    if (!data.product) {
-      console.log('No product data, falling back to mock')
-      return generateMockReviews(asin)
-    }
-
-    const product = data.product
-    const topReviews: AmazonReview[] = (product.top_reviews || []).map((r: Record<string, unknown>) => ({
-      title: (r.title as string) || '(タイトルなし)',
-      body: (r.body as string) || '',
-      rating: (r.rating as number) || 3,
-      date: ((r.date as Record<string, unknown>)?.raw as string) || new Date().toISOString().split('T')[0],
-      verified: (r.verified_purchase as boolean) || false,
-      helpfulVotes: (r.helpful_votes as number) || 0,
-    })).filter((r: AmazonReview) => r.body)
-
-    const lowRatingReviews = topReviews.filter((r: AmazonReview) => r.rating <= 2)
-    const highRatingReviews = topReviews.filter((r: AmazonReview) => r.rating >= 4)
-
-    console.log(`Fetched ${topReviews.length} reviews for ${asin} (low: ${lowRatingReviews.length}, high: ${highRatingReviews.length})`)
-
-    // top_reviewsが少なすぎる場合はreviewsエンドポイントも試す
-    if (topReviews.length < 3) {
-      console.log('Too few reviews from product endpoint, falling back to mock')
-      return generateMockReviews(asin)
-    }
-
-    return {
-      asin,
-      productName: product.title || `Amazon商品 ${asin}`,
-      totalReviews: product.ratings_total || topReviews.length,
-      averageRating: product.rating || parseFloat((topReviews.reduce((sum: number, r: AmazonReview) => sum + r.rating, 0) / topReviews.length).toFixed(1)),
-      ratingBreakdown: extractBreakdown(product) || calculateBreakdown(topReviews),
-      reviews: topReviews,
-      lowRatingReviews,
-      highRatingReviews,
-      fetchedAt: new Date().toISOString(),
+    switch (provider) {
+      case 'rainforest':
+        return await fetchReviewsFromRainforest(asin)
+      case 'scraperapi':
+        return await fetchReviewsFromScraperApi(asin)
+      default:
+        throw new ReviewFetchError(`Unsupported review provider: ${provider}`, provider)
     }
   } catch (error) {
-    console.error('Review fetch failed, using mock:', error)
-    return generateMockReviews(asin)
+    console.error(`[review-scraper] ${provider} failed for ${asin}:`, error)
+    throw normalizeReviewFetchError(error, provider)
   }
 }
 
-function extractBreakdown(product: Record<string, unknown>): { [key: number]: number } | null {
-  const breakdown = product.rating_breakdown as Record<string, { percentage?: number; count?: number }> | undefined
+function resolveProvider(): ReviewProvider {
+  if (REVIEW_PROVIDER === 'rainforest' || REVIEW_PROVIDER === 'scraperapi' || REVIEW_PROVIDER === 'mock') {
+    return REVIEW_PROVIDER
+  }
+
+  if (SCRAPERAPI_KEY) return 'scraperapi'
+  if (RAINFOREST_API_KEY) return 'rainforest'
+  if (process.env.NODE_ENV !== 'production') return 'mock'
+
+  throw new ReviewFetchError('No review provider configured. Set REVIEW_PROVIDER and provider credentials.', 'unknown')
+}
+
+async function fetchReviewsFromRainforest(asin: string): Promise<ReviewCollection> {
+  if (!RAINFOREST_API_KEY) {
+    throw new ReviewFetchError('RAINFOREST_API_KEY is not set', 'rainforest')
+  }
+
+  const url = `https://api.rainforestapi.com/request?api_key=${RAINFOREST_API_KEY}&type=product&asin=${asin}&amazon_domain=amazon.co.jp`
+  const res = await fetchWithRetry(url, 'rainforest')
+  const data = await res.json()
+
+  if (!data.product) {
+    throw new ReviewFetchError('Rainforest response does not contain product data', 'rainforest')
+  }
+
+  const product = data.product as Record<string, unknown>
+  const topReviews: AmazonReview[] = ((product.top_reviews as Record<string, unknown>[] | undefined) || [])
+    .map((review) => ({
+      title: asNonEmptyString(review.title) || '(タイトルなし)',
+      body: asNonEmptyString(review.body) || '',
+      rating: clampRating(asNumber(review.rating) || 3),
+      date: asNonEmptyString((review.date as Record<string, unknown> | undefined)?.raw) || todayIsoDate(),
+      verified: Boolean(review.verified_purchase),
+      helpfulVotes: asNumber(review.helpful_votes) || 0,
+    }))
+    .filter((review) => review.body)
+
+  if (topReviews.length < 3) {
+    throw new ReviewFetchError('Rainforest product endpoint returned too few reviews', 'rainforest')
+  }
+
+  return buildReviewCollection({
+    asin,
+    productName: asNonEmptyString(product.title) || `Amazon商品 ${asin}`,
+    totalReviews: asNumber(product.ratings_total) || topReviews.length,
+    averageRating: asNumber(product.rating),
+    ratingBreakdown: extractRainforestBreakdown(product) || calculateBreakdown(topReviews),
+    reviews: topReviews,
+    source: 'rainforest',
+    warnings: [],
+  })
+}
+
+async function fetchReviewsFromScraperApi(asin: string): Promise<ReviewCollection> {
+  if (!SCRAPERAPI_KEY) {
+    throw new ReviewFetchError('SCRAPERAPI_KEY is not set', 'scraperapi')
+  }
+
+  const allReviews: AmazonReview[] = []
+  const seenReviewKeys = new Set<string>()
+  const warnings: string[] = []
+  let productName: string | undefined
+  let totalReviews: number | undefined
+  let averageRating: number | undefined
+
+  for (let page = 1; page <= REVIEW_MAX_PAGES; page += 1) {
+    const html = await fetchScraperApiReviewPage(asin, page)
+    const parsed = parseAmazonReviewPage(html)
+
+    productName ||= parsed.productName
+    totalReviews ||= parsed.totalReviews
+    averageRating ||= parsed.averageRating
+
+    if (parsed.reviews.length === 0) {
+      warnings.push(`No reviews found on page ${page}`)
+      break
+    }
+
+    let newReviews = 0
+    for (const review of parsed.reviews) {
+      const key = buildReviewKey(review)
+      if (seenReviewKeys.has(key)) continue
+      seenReviewKeys.add(key)
+      allReviews.push(review)
+      newReviews += 1
+    }
+
+    if (newReviews === 0) {
+      warnings.push(`Page ${page} returned only duplicate reviews`)
+      break
+    }
+
+    if (!parsed.hasNextPage) {
+      break
+    }
+
+    await sleep(REVIEW_REQUEST_DELAY_MS)
+  }
+
+  if (allReviews.length === 0) {
+    throw new ReviewFetchError('ScraperAPI did not return any parsable reviews', 'scraperapi')
+  }
+
+  return buildReviewCollection({
+    asin,
+    productName: productName || `Amazon商品 ${asin}`,
+    totalReviews: totalReviews || allReviews.length,
+    averageRating,
+    ratingBreakdown: calculateBreakdown(allReviews),
+    reviews: allReviews,
+    source: 'scraperapi',
+    warnings,
+  })
+}
+
+async function fetchScraperApiReviewPage(asin: string, page: number): Promise<string> {
+  const targetUrl = `https://www.amazon.co.jp/product-reviews/${asin}/?pageNumber=${page}&language=ja_JP&sortBy=recent`
+  const scraperUrl = new URL('https://api.scraperapi.com/')
+  scraperUrl.searchParams.set('api_key', SCRAPERAPI_KEY as string)
+  scraperUrl.searchParams.set('url', targetUrl)
+  scraperUrl.searchParams.set('country_code', 'jp')
+  scraperUrl.searchParams.set('device_type', 'desktop')
+  scraperUrl.searchParams.set('keep_headers', 'true')
+
+  const res = await fetchWithRetry(scraperUrl.toString(), 'scraperapi')
+  return res.text()
+}
+
+function parseAmazonReviewPage(html: string): ParsedReviewPage {
+  const $ = load(html)
+  const reviews: AmazonReview[] = $('[data-hook="review"]')
+    .map((_, element) => {
+      const title = extractReviewTitle($, element)
+      const body = normalizeWhitespace($(element).find('[data-hook="review-body"]').text())
+      const ratingText = normalizeWhitespace(
+        $(element).find('[data-hook="review-star-rating"]').first().text()
+        || $(element).find('[data-hook="cmps-review-star-rating"]').first().text()
+      )
+      const date = normalizeWhitespace($(element).find('[data-hook="review-date"]').first().text()) || todayIsoDate()
+      const helpfulText = normalizeWhitespace($(element).find('[data-hook="helpful-vote-statement"]').first().text())
+      const badgeText = normalizeWhitespace($(element).find('[data-hook="avp-badge"]').first().text())
+
+      if (!body) return null
+
+      return {
+        title: title || '(タイトルなし)',
+        body,
+        rating: clampRating(parseJapaneseNumber(ratingText) || 3),
+        date,
+        verified: badgeText.includes('Amazonで購入') || normalizeWhitespace($(element).text()).includes('Amazonで購入'),
+        helpfulVotes: parseHelpfulVotes(helpfulText),
+      } satisfies AmazonReview
+    })
+    .get()
+    .filter((review): review is AmazonReview => Boolean(review))
+
+  const productName = normalizeWhitespace(
+    $('#cm_cr-product_info [data-hook="product-link"]').first().text()
+    || $('.product-title-word-break').first().text()
+    || $('#cm_cr-product_info').first().text()
+  )
+
+  const filterInfoText = normalizeWhitespace(
+    $('[data-hook="cr-filter-info-review-rating-count"]').first().text()
+    || $('#filter-info-section').first().text()
+  )
+
+  const averageRatingText = normalizeWhitespace(
+    $('[data-hook="rating-out-of-text"]').first().text()
+    || $('.averageStarRatingNumerical').first().text()
+  )
+
+  const hasNextPage = $('.a-pagination .a-last a').length > 0 && !$('.a-pagination .a-last').hasClass('a-disabled')
+
+  return {
+    productName: productName || undefined,
+    totalReviews: parseTotalReviews(filterInfoText),
+    averageRating: parseJapaneseNumber(averageRatingText) || undefined,
+    reviews,
+    hasNextPage,
+  }
+}
+
+function extractReviewTitle($: ReturnType<typeof load>, element: AnyNode): string {
+  const titleSpans = $(element)
+    .find('[data-hook="review-title"] span')
+    .map((_, span) => normalizeWhitespace($(span).text()))
+    .get()
+    .filter(Boolean)
+
+  return titleSpans[titleSpans.length - 1] || normalizeWhitespace($(element).find('[data-hook="review-title"]').first().text())
+}
+
+async function fetchWithRetry(url: string, provider: ReviewSource, attempt = 1): Promise<Response> {
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(REVIEW_REQUEST_TIMEOUT_MS) })
+    if (!res.ok) {
+      throw new ReviewFetchError(`${provider} returned HTTP ${res.status}`, provider)
+    }
+    return res
+  } catch (error) {
+    if (attempt >= REVIEW_REQUEST_RETRIES) {
+      throw normalizeReviewFetchError(error, provider)
+    }
+
+    await sleep(REVIEW_REQUEST_DELAY_MS * attempt)
+    return fetchWithRetry(url, provider, attempt + 1)
+  }
+}
+
+function buildReviewCollection(input: {
+  asin: string
+  productName: string
+  totalReviews: number
+  averageRating?: number
+  ratingBreakdown: { [key: number]: number }
+  reviews: AmazonReview[]
+  source: ReviewSource
+  warnings: string[]
+}): ReviewCollection {
+  const lowRatingReviews = input.reviews.filter((review) => review.rating <= 2)
+  const highRatingReviews = input.reviews.filter((review) => review.rating >= 4)
+  const averageRating = input.averageRating
+    || parseFloat((input.reviews.reduce((sum, review) => sum + review.rating, 0) / input.reviews.length).toFixed(1))
+
+  return {
+    asin: input.asin,
+    productName: input.productName,
+    totalReviews: input.totalReviews,
+    averageRating,
+    ratingBreakdown: input.ratingBreakdown,
+    reviews: input.reviews,
+    lowRatingReviews,
+    highRatingReviews,
+    fetchedAt: new Date().toISOString(),
+    fetchedCount: input.reviews.length,
+    source: input.source,
+    warnings: input.warnings,
+  }
+}
+
+function extractRainforestBreakdown(product: Record<string, unknown>): { [key: number]: number } | null {
+  const breakdown = product.rating_breakdown as Record<string, { count?: number }> | undefined
   if (!breakdown) return null
+
   return {
     5: breakdown.five_star?.count || 0,
     4: breakdown.four_star?.count || 0,
@@ -99,8 +339,78 @@ function extractBreakdown(product: Record<string, unknown>): { [key: number]: nu
 
 function calculateBreakdown(reviews: AmazonReview[]): { [key: number]: number } {
   const breakdown: { [key: number]: number } = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 }
-  reviews.forEach(r => { breakdown[r.rating] = (breakdown[r.rating] || 0) + 1 })
+  reviews.forEach((review) => {
+    breakdown[review.rating] = (breakdown[review.rating] || 0) + 1
+  })
   return breakdown
+}
+
+function parseTotalReviews(text: string): number | undefined {
+  if (!text) return undefined
+  const numbers = [...text.matchAll(/([0-9][0-9,]*)/g)]
+    .map((match) => Number.parseInt(match[1].replaceAll(',', ''), 10))
+    .filter((value) => Number.isFinite(value))
+
+  if (numbers.length === 0) return undefined
+  return Math.max(...numbers)
+}
+
+function parseHelpfulVotes(text: string): number {
+  if (!text) return 0
+  if (text.includes('最初のレビュー')) return 0
+  return parsePositiveInt(text.match(/([0-9][0-9,]*)/)?.[1], 0)
+}
+
+function parseJapaneseNumber(text: string): number | undefined {
+  if (!text) return undefined
+  const match = text.match(/([0-9]+(?:[.,][0-9]+)?)/)
+  if (!match) return undefined
+  return Number.parseFloat(match[1].replace(',', '.'))
+}
+
+function buildReviewKey(review: AmazonReview): string {
+  return [review.title, review.body, review.rating, review.date].join('::')
+}
+
+function normalizeWhitespace(value: string): string {
+  return value.replace(/\s+/g, ' ').trim()
+}
+
+function clampRating(value: number): number {
+  return Math.min(5, Math.max(1, Math.round(value)))
+}
+
+function asNumber(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number.parseFloat(value)
+    if (Number.isFinite(parsed)) return parsed
+  }
+  return undefined
+}
+
+function asNonEmptyString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined
+}
+
+function parsePositiveInt(value: string | undefined, fallback: number): number {
+  if (!value) return fallback
+  const parsed = Number.parseInt(value.replaceAll(',', ''), 10)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
+}
+
+function todayIsoDate(): string {
+  return new Date().toISOString().split('T')[0]
+}
+
+function normalizeReviewFetchError(error: unknown, provider: ReviewSource | 'unknown'): ReviewFetchError {
+  if (error instanceof ReviewFetchError) return error
+  if (error instanceof Error) return new ReviewFetchError(error.message, provider)
+  return new ReviewFetchError('Unknown review fetch error', provider)
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 // ============================================
@@ -241,12 +551,15 @@ function generateMockReviews(asin: string): ReviewCollection {
     asin,
     productName: asin === 'B0DEMOASIN' ? 'シュワッシュ 炭酸シャンプー 200ml' : `Amazon商品 ${asin}`,
     totalReviews: allReviews.length,
-    averageRating: parseFloat((allReviews.reduce((sum, r) => sum + r.rating, 0) / allReviews.length).toFixed(1)),
+    averageRating: parseFloat((allReviews.reduce((sum, review) => sum + review.rating, 0) / allReviews.length).toFixed(1)),
     ratingBreakdown: calculateBreakdown(allReviews),
     reviews: allReviews,
     lowRatingReviews,
     highRatingReviews,
     fetchedAt: new Date().toISOString(),
+    fetchedCount: allReviews.length,
+    source: 'mock',
+    warnings: ['Using mock review data'],
   }
 }
 
