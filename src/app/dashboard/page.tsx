@@ -497,28 +497,28 @@ export default function Dashboard() {
           <div className="space-y-6">
             {/* Report Header */}
             <div className="bg-white rounded-xl border border-gray-200 p-6 break-inside-avoid">
-              <div className="flex items-center justify-between mb-2">
+              <div className="mb-2">
                 <h2 className="text-xl font-bold text-gray-900">{report.productName}</h2>
-                <div className="flex items-center gap-2 print:hidden">
-                  <button
-                    onClick={copyShareLink}
-                    className="px-3 py-1.5 text-sm font-medium text-blue-700 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors"
-                  >
-                    共有リンクをコピー
-                  </button>
-                  <button
-                    onClick={printReport}
-                    className="px-3 py-1.5 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors"
-                  >
-                    印刷 / PDF保存
-                  </button>
-                </div>
               </div>
               <div className="flex items-center justify-between gap-3">
                 <p className="text-sm text-gray-500 font-mono">ASIN: {report.asin}</p>
                 <span className="text-xs text-gray-400">
                   {new Date(report.analyzedAt).toLocaleString('ja-JP')} / {report.totalReviewsAnalyzed}件分析
                 </span>
+              </div>
+              <div className="mt-4 flex flex-wrap items-center justify-end gap-2 print:hidden">
+                <button
+                  onClick={copyShareLink}
+                  className="inline-flex items-center rounded-full border border-blue-200 bg-white px-3 py-1.5 text-sm font-medium text-blue-700 hover:bg-blue-50 transition-colors"
+                >
+                  共有リンクをコピー
+                </button>
+                <button
+                  onClick={printReport}
+                  className="inline-flex items-center rounded-full border border-gray-200 bg-gray-50 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-100 transition-colors"
+                >
+                  印刷 / PDF保存
+                </button>
               </div>
               {shareMessage && (
                 <div className="mt-3 rounded-lg bg-blue-50 px-3 py-2 text-sm text-blue-700 print:hidden">
@@ -581,10 +581,10 @@ export default function Dashboard() {
               <div className="mb-6 rounded-xl border border-gray-100 bg-gradient-to-br from-slate-50 to-white p-4">
                 <div className="mb-3 flex items-center justify-between">
                   <div>
-                    <h4 className="text-sm font-semibold text-gray-900">カテゴリ比較グラフ</h4>
-                    <p className="text-xs text-gray-500">どの論点にレビュー言及が集中しているかを比較</p>
+                    <h4 className="text-sm font-semibold text-gray-900">レビュー論点の分布</h4>
+                    <p className="text-xs text-gray-500">どの観点に言及が集まっているかを比較</p>
                   </div>
-                  <span className="text-xs text-gray-400">言及率ベース</span>
+                  <span className="text-xs text-gray-400">言及割合</span>
                 </div>
                 <div className="space-y-3">
                   {report.categoryBreakdown.map((cat, i) => (
