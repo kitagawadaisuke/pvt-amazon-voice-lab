@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { fetchReviews, validateAsin, ReviewCollection } from '@/lib/services/review-scraper'
 import { analyzeReviews } from '@/lib/services/pox-analyzer'
+import { saveAnalysisResult } from '@/lib/store/review-memory-store'
 
 // CORS headers for Chrome extension
 const corsHeaders = {
@@ -38,6 +39,13 @@ export async function POST(request: NextRequest) {
       console.log(`Chrome拡張からレビュー受信: ${reviewCollection.reviews.length}件 (low: ${reviewCollection.lowRatingReviews.length}, high: ${reviewCollection.highRatingReviews.length})`)
 
       const report = await analyzeReviews(reviewCollection, userApiKey)
+      saveAnalysisResult({
+        asin: reviewCollection.asin,
+        productName: reviewCollection.productName,
+        averageRating: reviewCollection.averageRating,
+        totalReviews: reviewCollection.totalReviews,
+        report,
+      })
 
       return NextResponse.json({
         success: true,
@@ -73,6 +81,13 @@ export async function POST(request: NextRequest) {
   try {
     const reviews = await fetchReviews(asin)
     const report = await analyzeReviews(reviews, userApiKey)
+    saveAnalysisResult({
+      asin: reviews.asin,
+      productName: reviews.productName,
+      averageRating: reviews.averageRating,
+      totalReviews: reviews.totalReviews,
+      report,
+    })
 
     return NextResponse.json({
       success: true,

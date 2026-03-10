@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import { useSearchParams } from 'next/navigation'
 
 interface Product {
   id: string
@@ -52,10 +53,9 @@ const severityStyles = {
 const confidenceLabels = { high: '確度高', medium: '確度中', low: '確度低' }
 
 export default function Dashboard() {
+  const searchParams = useSearchParams()
   const [products, setProducts] = useState<Product[]>([])
-  const [newAsin, setNewAsin] = useState('')
-  const [newName, setNewName] = useState('')
-  const [analyzing, setAnalyzing] = useState<string | null>(null)
+  const [loadingReportId, setLoadingReportId] = useState<string | null>(null)
   const [report, setReport] = useState<AnalysisReport | null>(null)
   const [activeTab, setActiveTab] = useState<'products' | 'report'>('products')
   const [error, setError] = useState<string | null>(null)
@@ -72,50 +72,75 @@ export default function Dashboard() {
     fetch('/api/products').then(r => r.json()).then(d => setProducts(d.products))
   }, [])
 
-  const addProduct = async () => {
-    if (!newAsin) return
-    setError(null)
-    const res = await fetch('/api/products', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ asin: newAsin, name: newName || undefined }),
-    })
-    const data = await res.json()
-    if (!res.ok) {
-      setError(data.error)
-      return
-    }
-    setProducts(prev => [...prev, data.product])
-    setNewAsin('')
-    setNewName('')
-  }
+  useEffect(() => {
+    const asin = searchParams.get('asin')
+    if (!asin) return
 
-  const analyzeProduct = async (product: Product) => {
-    setAnalyzing(product.id)
-    setReport(null)
+    let cancelled = false
+
+    const loadReport = async () => {
+      setError(null)
+      try {
+        const [productsRes, reportRes] = await Promise.all([
+          fetch('/api/products'),
+          fetch(`/api/reports?asin=${encodeURIComponent(asin)}`),
+        ])
+
+        const productsData = await productsRes.json()
+        if (!cancelled && productsRes.ok) {
+          setProducts(productsData.products || [])
+        }
+
+        const reportData = await reportRes.json()
+        if (!reportRes.ok) {
+          throw new Error(reportData.error || '分析レポートの取得に失敗しました')
+        }
+
+        if (!cancelled) {
+          setReport(reportData.report)
+          setActiveTab('report')
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : '分析レポートの取得に失敗しました')
+        }
+      }
+    }
+
+    loadReport()
+
+    return () => {
+      cancelled = true
+    }
+  }, [searchParams])
+
+  const openReport = async (product: Product) => {
+    setLoadingReportId(product.id)
     setError(null)
     try {
-      const res = await fetch('/api/analyze', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ asin: product.asin, apiKey: userApiKey || undefined }),
-      })
+      const res = await fetch(`/api/reports?asin=${encodeURIComponent(product.asin)}`)
       const data = await res.json()
-      if (data.success) {
-        setReport(data.report)
-        setActiveTab('report')
+      if (!res.ok) {
+        throw new Error(data.error || '分析レポートが見つかりません')
       }
+      setReport(data.report)
+      setActiveTab('report')
     } catch (err) {
-      console.error('Analysis failed:', err)
-      setError('分析に失敗しました')
+      setError(err instanceof Error ? err.message : '分析レポートが見つかりません')
     }
-    setAnalyzing(null)
+    setLoadingReportId(null)
   }
 
   const deleteProduct = async (id: string) => {
     await fetch(`/api/products/${id}`, { method: 'DELETE' })
     setProducts(prev => prev.filter(p => p.id !== id))
   }
+
+  const currentReportProduct = report ? products.find((product) => product.asin === report.asin) : null
+  const totalRatingsCount = currentReportProduct?.totalReviews || 0
+  const commentCoverageRate = totalRatingsCount > 0 && report
+    ? ((report.totalReviewsAnalyzed / totalRatingsCount) * 100).toFixed(1)
+    : null
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -184,7 +209,7 @@ export default function Dashboard() {
               activeTab === 'products' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
             }`}
           >
-            商品管理 ({products.length})
+            レポート一覧 ({products.length})
           </button>
           <button
             onClick={() => setActiveTab('report')}
@@ -204,32 +229,11 @@ export default function Dashboard() {
 
         {activeTab === 'products' && (
           <>
-            {/* Add Product Form */}
             <div className="bg-white rounded-xl border border-gray-200 p-6 mb-6">
-              <h2 className="text-lg font-semibold text-gray-900 mb-4">分析する商品を追加</h2>
-              <div className="flex gap-3">
-                <input
-                  type="text"
-                  value={newName}
-                  onChange={e => setNewName(e.target.value)}
-                  placeholder="商品名（任意）"
-                  className="flex-1 max-w-[200px] px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-                <input
-                  type="text"
-                  value={newAsin}
-                  onChange={e => setNewAsin(e.target.value)}
-                  placeholder="ASIN（例: B0DEMO12345）またはAmazon URL"
-                  className="flex-2 min-w-0 flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  onKeyDown={e => e.key === 'Enter' && addProduct()}
-                />
-                <button
-                  onClick={addProduct}
-                  className="px-5 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors whitespace-nowrap"
-                >
-                  追加
-                </button>
-              </div>
+              <h2 className="text-lg font-semibold text-gray-900 mb-2">収集済みレポート</h2>
+              <p className="text-sm text-gray-500">
+                Amazon 上でレビュー取得と分析を完了した商品だけがここに表示されます。
+              </p>
             </div>
 
             {/* Product List */}
@@ -258,11 +262,11 @@ export default function Dashboard() {
                     </div>
                     <div className="flex gap-2 ml-4">
                       <button
-                        onClick={() => analyzeProduct(product)}
-                        disabled={analyzing === product.id}
+                        onClick={() => openReport(product)}
+                        disabled={loadingReportId === product.id}
                         className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50"
                       >
-                        {analyzing === product.id ? '分析中...' : 'POX分析'}
+                        {loadingReportId === product.id ? '読込中...' : 'レポートを見る'}
                       </button>
                       <button
                         onClick={() => deleteProduct(product.id)}
@@ -276,8 +280,8 @@ export default function Dashboard() {
               ))}
               {products.length === 0 && (
                 <div className="text-center py-12 text-gray-400">
-                  <p className="text-lg mb-1">商品が登録されていません</p>
-                  <p className="text-sm">ASINを入力して商品を追加してください</p>
+                  <p className="text-lg mb-1">レポートはまだありません</p>
+                  <p className="text-sm">Amazon 側でレビュー取得と分析を完了すると、ここに一覧表示されます</p>
                 </div>
               )}
             </div>
@@ -295,6 +299,24 @@ export default function Dashboard() {
                 </span>
               </div>
               <p className="text-sm text-gray-500 font-mono">ASIN: {report.asin}</p>
+              <div className="grid gap-3 md:grid-cols-3 mt-4">
+                <div className="rounded-lg border border-gray-100 bg-gray-50 p-4">
+                  <div className="text-xs text-gray-500 mb-1">総評価数</div>
+                  <div className="text-lg font-semibold text-gray-900">
+                    {totalRatingsCount > 0 ? `${totalRatingsCount}件` : '不明'}
+                  </div>
+                </div>
+                <div className="rounded-lg border border-gray-100 bg-gray-50 p-4">
+                  <div className="text-xs text-gray-500 mb-1">コメント付きレビュー</div>
+                  <div className="text-lg font-semibold text-gray-900">{report.totalReviewsAnalyzed}件</div>
+                </div>
+                <div className="rounded-lg border border-gray-100 bg-gray-50 p-4">
+                  <div className="text-xs text-gray-500 mb-1">コメント率</div>
+                  <div className="text-lg font-semibold text-gray-900">
+                    {commentCoverageRate ? `${commentCoverageRate}%` : '不明'}
+                  </div>
+                </div>
+              </div>
             </div>
 
             {/* Category Breakdown (Step A) */}

@@ -8,6 +8,10 @@ const progressSection = document.getElementById('progressSection');
 const reviewCount = document.getElementById('reviewCount');
 const progressFill = document.getElementById('progressFill');
 const progressText = document.getElementById('progressText');
+const currentPageMeta = document.getElementById('currentPageMeta');
+const captureRateMeta = document.getElementById('captureRateMeta');
+const textReviewMeta = document.getElementById('textReviewMeta');
+const addedCountMeta = document.getElementById('addedCountMeta');
 const startBtn = document.getElementById('startBtn');
 const stopBtn = document.getElementById('stopBtn');
 const analyzeBtn = document.getElementById('analyzeBtn');
@@ -50,6 +54,14 @@ async function init() {
     reviewCount.textContent = `${currentCollectedReviews.length}件`;
     progressFill.style.width = '100%';
     progressText.textContent = '取得停止';
+    renderProgressMeta({
+      total: currentCollectedReviews.length,
+      currentPage: state.currentPage || 0,
+      maxPages: state.maxPages || '-',
+      textReviewCount: state.textReviewCount || 0,
+      targetReviewCount: state.targetReviewCount || 0,
+      addedCount: 0,
+    });
     setStatus(state.blockReason || 'Amazon側のブロックを検知しました', 'error');
     analyzeBtn.style.display = currentCollectedReviews.length > 0 ? 'block' : 'none';
     resetBtn.style.display = 'block';
@@ -68,6 +80,14 @@ async function init() {
     const pct = Math.min((state.reviews.length / (state.productInfo?.totalReviews || 100)) * 100, 100);
     progressFill.style.width = `${pct}%`;
     progressText.textContent = `${state.phase === 'all' ? '全て' : state.phase} - ページ${state.currentPage} 取得中...`;
+    renderProgressMeta({
+      total: state.reviews.length,
+      currentPage: state.currentPage,
+      maxPages: state.phase === 'all' ? 10 : 3,
+      textReviewCount: state.textReviewCount || 0,
+      targetReviewCount: state.targetReviewCount || 0,
+      addedCount: 0,
+    });
     setStatus(`レビュー取得中... (${state.reviews.length}件)`, 'collecting');
     stopBtn.style.display = 'block';
     return;
@@ -82,6 +102,14 @@ async function init() {
     reviewCount.textContent = `${currentCollectedReviews.length}件`;
     progressFill.style.width = '100%';
     progressText.textContent = '取得完了';
+    renderProgressMeta({
+      total: currentCollectedReviews.length,
+      currentPage: state.currentPage || '-',
+      maxPages: state.currentPage || '-',
+      textReviewCount: state.textReviewCount || currentCollectedReviews.length,
+      targetReviewCount: state.targetReviewCount || 0,
+      addedCount: 0,
+    });
     setStatus(`${state.reviews.length}件のレビューを取得しました`, 'success');
     analyzeBtn.style.display = 'block';
     resetBtn.style.display = 'block';
@@ -131,6 +159,31 @@ function showProductInfo(info) {
   totalRatingsEl.textContent = `${info.totalReviews}件`;
 }
 
+function renderProgressMeta({
+  total = 0,
+  currentPage = 0,
+  maxPages = '-',
+  textReviewCount = 0,
+  targetReviewCount = 0,
+  addedCount = 0,
+}) {
+  currentPageMeta.textContent = `${currentPage}/${maxPages}`;
+
+  const denominator = textReviewCount || currentProductInfo?.totalReviews || 0;
+  const captureRate = denominator > 0 ? `${Math.min((total / denominator) * 100, 100).toFixed(0)}%` : '-';
+  captureRateMeta.textContent = captureRate;
+
+  if (textReviewCount > 0 && targetReviewCount > 0) {
+    textReviewMeta.textContent = `${total}/${targetReviewCount}目標`;
+  } else if (textReviewCount > 0) {
+    textReviewMeta.textContent = `${textReviewCount}件`;
+  } else {
+    textReviewMeta.textContent = '測定中';
+  }
+
+  addedCountMeta.textContent = addedCount > 0 ? `+${addedCount}件` : '-';
+}
+
 // レビュー取得開始
 startBtn.addEventListener('click', async () => {
   startBtn.style.display = 'none';
@@ -164,16 +217,34 @@ stopBtn.addEventListener('click', async () => {
 chrome.runtime.onMessage.addListener((msg) => {
   if (msg.type === 'COLLECTION_PROGRESS') {
     reviewCount.textContent = `${msg.total}件`;
-    const pct = Math.min((msg.total / (currentProductInfo?.totalReviews || 100)) * 100, 100);
+    const progressBase = msg.targetReviewCount || msg.textReviewCount || currentProductInfo?.totalReviews || 100;
+    const pct = Math.min((msg.total / progressBase) * 100, 100);
     progressFill.style.width = `${pct}%`;
-    progressText.textContent = `${msg.currentFilter} - ページ${msg.currentPage} 取得中...`;
-    setStatus(`レビュー取得中... (${msg.total}件)`, 'collecting');
+    progressText.textContent = `${msg.currentFilter} - ページ${msg.currentPage}/${msg.maxPages} 取得中...`;
+    renderProgressMeta({
+      total: msg.total,
+      currentPage: msg.currentPage,
+      maxPages: msg.maxPages || '-',
+      textReviewCount: msg.textReviewCount || 0,
+      targetReviewCount: msg.targetReviewCount || 0,
+      addedCount: msg.addedCount || 0,
+    });
+    const targetSuffix = msg.targetReviewCount ? ` / 目標${msg.targetReviewCount}件` : '';
+    setStatus(`レビュー取得中... (${msg.total}件${targetSuffix})`, 'collecting');
   }
 
   if (msg.type === 'TEXT_REVIEW_COUNT') {
     const textReviewsEl = document.getElementById('textReviews');
     textReviewsEl.textContent = `${msg.textReviewCount}件`;
     textReviewsEl.style.color = msg.textReviewCount < 10 ? '#ef4444' : '#3b82f6';
+    renderProgressMeta({
+      total: currentCollectedReviews.length,
+      currentPage: currentPageMeta.textContent.split('/')[0] || 0,
+      maxPages: currentPageMeta.textContent.split('/')[1] || '-',
+      textReviewCount: msg.textReviewCount,
+      targetReviewCount: msg.targetReviewCount || 0,
+      addedCount: 0,
+    });
     if (msg.textReviewCount < 10) {
       setStatus(`コメント付きレビューが${msg.textReviewCount}件しかありません。分析精度が低くなる可能性があります`, 'error');
     }
@@ -185,6 +256,14 @@ chrome.runtime.onMessage.addListener((msg) => {
     reviewCount.textContent = `${currentCollectedReviews.length}件`;
     progressFill.style.width = '100%';
     progressText.textContent = '取得完了';
+    renderProgressMeta({
+      total: currentCollectedReviews.length,
+      currentPage: currentPageMeta.textContent.split('/')[0] || '-',
+      maxPages: currentPageMeta.textContent.split('/')[1] || '-',
+      textReviewCount: currentCollectedReviews.length,
+      targetReviewCount: 0,
+      addedCount: 0,
+    });
     setStatus(`${currentCollectedReviews.length}件のレビューを取得しました`, 'success');
     analyzeBtn.style.display = 'block';
     resetBtn.style.display = 'block';

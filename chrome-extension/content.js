@@ -5,7 +5,8 @@
 (function () {
   'use strict';
 
-  const MAX_PAGES_PER_FILTER = 10;
+  const HARD_PAGE_LIMIT_ALL = 1200;
+  const HARD_PAGE_LIMIT_SUPPLEMENTAL = 200;
   const ZERO_NEW_PAGE_LIMIT = 2;
   const ALL_FILTER_TARGET_RATE = 0.8;
   const DOM_UPDATE_TIMEOUT_MS = 8000;
@@ -19,6 +20,7 @@
     'ページを再読み込みしてください',
     'There was a problem filtering reviews right now',
   ];
+  const OVERLAY_ID = 'reviewai-progress-overlay';
 
   // ページの種類を判定
   function getPageType() {
@@ -124,6 +126,18 @@
     return parseInt(url.searchParams.get('pageNumber') || '1', 10);
   }
 
+  function getPaginationTotalPages() {
+    const pageCandidates = Array.from(document.querySelectorAll('.a-pagination li, .a-pagination a, .a-pagination span'))
+      .map((element) => parseInt((element.textContent || '').trim(), 10))
+      .filter((value) => !Number.isNaN(value) && value > 0);
+
+    if (pageCandidates.length === 0) {
+      return null;
+    }
+
+    return Math.max(...pageCandidates);
+  }
+
   function getCurrentFilter() {
     const url = new URL(window.location.href);
     return url.searchParams.get('filterByStar') || 'all';
@@ -137,6 +151,275 @@
       url.searchParams.set('filterByStar', filterByStar);
     }
     return url.toString();
+  }
+
+  async function getServerUrl() {
+    return new Promise((resolve) => {
+      chrome.storage.local.get(['serverUrl'], (result) => {
+        resolve((result.serverUrl || 'http://localhost:3000').replace(/\/$/, ''));
+      });
+    });
+  }
+
+  function ensureOverlay() {
+    let overlay = document.getElementById(OVERLAY_ID);
+    if (overlay) return overlay;
+
+    overlay = document.createElement('div');
+    overlay.id = OVERLAY_ID;
+    overlay.innerHTML = `
+      <div class="reviewai-header">
+        <div class="reviewai-title">ReviewAI</div>
+        <button type="button" class="reviewai-close" aria-label="閉じる">×</button>
+      </div>
+      <div class="reviewai-status">待機中</div>
+      <div class="reviewai-grid">
+        <div class="reviewai-card"><div class="reviewai-label">現在ページ</div><div class="reviewai-value" data-key="page">-</div></div>
+        <div class="reviewai-card"><div class="reviewai-label">取得件数</div><div class="reviewai-value" data-key="total">-</div></div>
+        <div class="reviewai-card"><div class="reviewai-label">目標</div><div class="reviewai-value" data-key="target">-</div></div>
+        <div class="reviewai-card"><div class="reviewai-label">今回追加</div><div class="reviewai-value" data-key="added">-</div></div>
+      </div>
+      <div class="reviewai-progress"><div class="reviewai-progress-fill"></div></div>
+      <div class="reviewai-subtext">レビュー取得の進行状況を表示しています</div>
+      <button type="button" class="reviewai-stop">取得を中止</button>
+      <button type="button" class="reviewai-analyze">分析へ進む</button>
+    `;
+
+    const style = document.createElement('style');
+    style.textContent = `
+      #${OVERLAY_ID} {
+        position: fixed;
+        right: 16px;
+        bottom: 16px;
+        z-index: 2147483647;
+        width: 320px;
+        padding: 14px;
+        border-radius: 14px;
+        background: rgba(15, 23, 42, 0.96);
+        color: #e2e8f0;
+        box-shadow: 0 18px 50px rgba(15, 23, 42, 0.35);
+        border: 1px solid rgba(148, 163, 184, 0.18);
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+      #${OVERLAY_ID}.reviewai-hidden { display: none; }
+      #${OVERLAY_ID} .reviewai-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 10px;
+      }
+      #${OVERLAY_ID} .reviewai-title {
+        font-size: 15px;
+        font-weight: 700;
+      }
+      #${OVERLAY_ID} .reviewai-close {
+        border: 0;
+        background: transparent;
+        color: #94a3b8;
+        font-size: 18px;
+        cursor: pointer;
+      }
+      #${OVERLAY_ID} .reviewai-status {
+        font-size: 13px;
+        margin-bottom: 10px;
+        color: #cbd5e1;
+      }
+      #${OVERLAY_ID} .reviewai-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+        margin-bottom: 10px;
+      }
+      #${OVERLAY_ID} .reviewai-card {
+        border-radius: 10px;
+        padding: 8px;
+        background: rgba(30, 41, 59, 0.9);
+        border: 1px solid rgba(71, 85, 105, 0.55);
+      }
+      #${OVERLAY_ID} .reviewai-label {
+        color: #94a3b8;
+        font-size: 11px;
+        margin-bottom: 3px;
+      }
+      #${OVERLAY_ID} .reviewai-value {
+        font-size: 14px;
+        font-weight: 700;
+      }
+      #${OVERLAY_ID} .reviewai-progress {
+        height: 8px;
+        border-radius: 999px;
+        overflow: hidden;
+        background: rgba(51, 65, 85, 0.9);
+        margin-bottom: 10px;
+      }
+      #${OVERLAY_ID} .reviewai-progress-fill {
+        width: 0%;
+        height: 100%;
+        background: linear-gradient(90deg, #38bdf8, #34d399);
+        transition: width 0.25s ease;
+      }
+      #${OVERLAY_ID} .reviewai-subtext {
+        font-size: 12px;
+        color: #94a3b8;
+        margin-bottom: 10px;
+      }
+      #${OVERLAY_ID} .reviewai-stop {
+        width: 100%;
+        padding: 9px 10px;
+        border: 0;
+        border-radius: 10px;
+        background: #dc2626;
+        color: white;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      #${OVERLAY_ID} .reviewai-analyze {
+        width: 100%;
+        margin-top: 8px;
+        padding: 9px 10px;
+        border: 0;
+        border-radius: 10px;
+        background: linear-gradient(135deg, #059669, #10b981);
+        color: white;
+        font-weight: 700;
+        cursor: pointer;
+        display: none;
+      }
+      #${OVERLAY_ID}[data-state="completed"] .reviewai-stop,
+      #${OVERLAY_ID}[data-state="blocked"] .reviewai-stop {
+        display: none;
+      }
+      #${OVERLAY_ID}[data-state="completed"] .reviewai-analyze,
+      #${OVERLAY_ID}[data-state="blocked"] .reviewai-analyze {
+        display: block;
+      }
+      @media (max-width: 640px) {
+        #${OVERLAY_ID} {
+          left: 12px;
+          right: 12px;
+          bottom: 12px;
+          width: auto;
+        }
+      }
+    `;
+
+    document.documentElement.appendChild(style);
+    document.body.appendChild(overlay);
+
+    overlay.querySelector('.reviewai-close').addEventListener('click', () => {
+      overlay.classList.add('reviewai-hidden');
+    });
+    overlay.querySelector('.reviewai-stop').addEventListener('click', () => {
+      stopCollection();
+      renderOverlay({
+        collecting: false,
+        reviews: [],
+      }, {
+        statusText: '取得を中止しました',
+        stateKey: 'blocked',
+      });
+    });
+    overlay.querySelector('.reviewai-analyze').addEventListener('click', async () => {
+      const state = await loadCollectionState();
+      await runAnalyzeFlow(state);
+    });
+
+    return overlay;
+  }
+
+  function renderOverlay(state, options = {}) {
+    if (!document.body) return;
+    const overlay = ensureOverlay();
+    overlay.classList.remove('reviewai-hidden');
+
+    const total = state?.reviews?.length || 0;
+    const textReviewCount = state?.textReviewCount || 0;
+    const targetReviewCount = state?.targetReviewCount || 0;
+    const currentPage = state?.currentPage || 0;
+    const maxPages = options.maxPages || state?.displayTotalPages || state?.currentPage || 1;
+    const addedCount = options.addedCount || 0;
+    const progressBase = targetReviewCount || textReviewCount || state?.productInfo?.totalReviews || 100;
+    const progressRate = Math.max(0, Math.min((total / progressBase) * 100, 100));
+    const stateKey = options.stateKey || (state?.blocked ? 'blocked' : state?.collecting ? 'collecting' : 'completed');
+
+    overlay.dataset.state = stateKey;
+    overlay.querySelector('.reviewai-status').textContent = options.statusText
+      || (stateKey === 'blocked'
+        ? (state?.blockReason || 'Amazon側で制限を検知しました')
+        : stateKey === 'completed'
+          ? `取得完了: ${total}件`
+          : `${getFilterLabel(state?.phase || 'all')} - ページ${currentPage}/${maxPages} を取得中`);
+    overlay.querySelector('[data-key="page"]').textContent = `${currentPage}/${maxPages}`;
+    overlay.querySelector('[data-key="total"]').textContent = `${total}件`;
+    overlay.querySelector('[data-key="target"]').textContent = targetReviewCount ? `${targetReviewCount}件` : (textReviewCount ? `${textReviewCount}件` : '測定中');
+    overlay.querySelector('[data-key="added"]').textContent = addedCount > 0 ? `+${addedCount}件` : '-';
+    overlay.querySelector('.reviewai-progress-fill').style.width = `${progressRate}%`;
+    overlay.querySelector('.reviewai-subtext').textContent = options.subtext
+      || (stateKey === 'collecting'
+        ? `コメント付きレビュー ${textReviewCount || '-'}件 / 現在 ${total}件`
+        : stateKey === 'completed'
+          ? 'POX分析に進めます'
+          : '再開するには拡張から再実行してください');
+    const analyzeButton = overlay.querySelector('.reviewai-analyze');
+    analyzeButton.disabled = stateKey === 'collecting';
+    analyzeButton.textContent = stateKey === 'completed' ? '分析へ進む' : '分析を再実行';
+  }
+
+  async function runAnalyzeFlow(state) {
+    if (!state || !state.reviews || state.reviews.length === 0) {
+      renderOverlay(state || { reviews: [] }, {
+        stateKey: 'blocked',
+        statusText: '分析できるレビューがありません',
+        subtext: '先にレビュー取得を完了してください',
+      });
+      return;
+    }
+
+    const serverUrl = await getServerUrl();
+    const payload = {
+      asin: state.productInfo?.asin,
+      source: 'chrome_extension',
+      reviews: {
+        asin: state.productInfo?.asin,
+        productName: state.productInfo?.title,
+        totalReviews: state.productInfo?.totalReviews || state.reviews.length,
+        averageRating: state.productInfo?.rating || 0,
+        reviews: state.reviews,
+        lowRatingReviews: state.reviews.filter((review) => review.rating <= 2),
+        highRatingReviews: state.reviews.filter((review) => review.rating >= 4),
+        fetchedAt: new Date().toISOString(),
+      },
+    };
+
+    renderOverlay(state, {
+      stateKey: 'completed',
+      statusText: '分析を実行中...',
+      subtext: 'ReviewAIサーバーへ送信しています',
+    });
+
+    try {
+      const response = await fetch(`${serverUrl}/api/analyze`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!response.ok) throw new Error(`Server error: ${response.status}`);
+
+      await response.json();
+      window.open(`${serverUrl}/dashboard?asin=${state.productInfo?.asin}`, '_blank', 'noopener,noreferrer');
+      renderOverlay(state, {
+        stateKey: 'completed',
+        statusText: '分析完了',
+        subtext: 'ダッシュボードを新しいタブで開きました',
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'unknown error';
+      renderOverlay(state, {
+        stateKey: 'blocked',
+        statusText: '分析に失敗しました',
+        subtext: message,
+      });
+    }
   }
 
   function getNextPageLink() {
@@ -217,6 +500,32 @@
       five_star: '★5',
     };
     return labels[filter] || filter;
+  }
+
+  function getEstimatedTotalPages(state, currentPageReviewCount = 10) {
+    const paginationTotalPages = getPaginationTotalPages();
+    if (paginationTotalPages) {
+      return paginationTotalPages;
+    }
+
+    const reviewCountBase = state?.textReviewCount || state?.productInfo?.totalReviews || 0;
+    if (!reviewCountBase) {
+      return null;
+    }
+
+    const pageSize = Math.max(currentPageReviewCount || 0, 10);
+    return Math.max(1, Math.ceil(reviewCountBase / pageSize));
+  }
+
+  function getCollectionPageLimit(state, currentPageReviewCount = 10) {
+    const estimatedTotalPages = getEstimatedTotalPages(state, currentPageReviewCount);
+    const hardLimit = state?.phase === 'all' ? HARD_PAGE_LIMIT_ALL : HARD_PAGE_LIMIT_SUPPLEMENTAL;
+
+    if (!estimatedTotalPages) {
+      return hardLimit;
+    }
+
+    return Math.min(Math.max(estimatedTotalPages, state?.currentPage || 1), hardLimit);
   }
 
   function isBlockedPage() {
@@ -325,6 +634,11 @@
       reason,
       total: nextState.reviews.length,
     }).catch(() => {});
+    renderOverlay(nextState, {
+      stateKey: 'blocked',
+      statusText: reason,
+      subtext: `取得済み ${nextState.reviews.length}件`,
+    });
   }
 
   async function finalizeCollection(state) {
@@ -341,6 +655,11 @@
       textReviewCount: nextState.textReviewCount || 0,
       phase: nextState.phase,
     }).catch(() => {});
+    renderOverlay(nextState, {
+      stateKey: 'completed',
+      statusText: `取得完了: ${nextState.reviews.length}件`,
+      subtext: `コメント付きレビュー ${nextState.textReviewCount || nextState.reviews.length}件中`,
+    });
   }
 
   // storageからコレクション状態を読み込み
@@ -415,6 +734,11 @@
     console.log(
       `[ReviewAI] Arrived at reviews page. phase=${state.phase}, expectedPage=${state.currentPage}, actualPage=${actualPage}, expectedFilter=${state.phase}, actualFilter=${actualFilter}, collected=${state.reviews.length}, fromDomUpdate=${fromDomUpdate}`
     );
+    renderOverlay(state, {
+      stateKey: 'collecting',
+      statusText: `${getFilterLabel(state.phase || 'all')} - ページ${actualPage} 読み込み中`,
+      subtext: 'レビューDOMの更新を待っています',
+    });
 
     // 少し待ってDOMが完全にロードされるのを待つ
     await new Promise((resolve) => setTimeout(resolve, fromDomUpdate ? 500 : 1500));
@@ -447,6 +771,7 @@
           type: 'TEXT_REVIEW_COUNT',
           textReviewCount: textCount,
           totalRatings: state.productInfo?.totalReviews || 0,
+          targetReviewCount: state.targetReviewCount,
         }).catch(() => {});
       }
     }
@@ -479,18 +804,11 @@
     }
 
     state.zeroNewPages = addedCount === 0 ? (state.zeroNewPages || 0) + 1 : 0;
+    state.displayTotalPages = getEstimatedTotalPages(state, pageReviews.length) || state.displayTotalPages || state.currentPage || 1;
     console.log(`[ReviewAI] Added ${addedCount} new reviews, total: ${state.reviews.length}`);
 
-    // 進捗を通知
-    chrome.runtime.sendMessage({
-      type: 'COLLECTION_PROGRESS',
-      total: state.reviews.length,
-      currentPage: state.currentPage,
-      currentFilter: getFilterLabel(state.phase),
-    }).catch(() => {});
-
     // 次のページへ進むか判定
-    const maxPages = state.phase === 'all' ? MAX_PAGES_PER_FILTER : 3;
+    const maxPages = getCollectionPageLimit(state, pageReviews.length);
     const hasNextPage = !!document.querySelector('.a-pagination .a-last:not(.a-disabled) a, li.a-last:not(.a-disabled) a');
     const asin = extractAsin();
     const nextPageNum = (state.currentPage || 1) + 1;
@@ -498,6 +816,27 @@
     const shouldContinuePaging = hasNextPage
       && nextPageNum <= maxPages
       && state.zeroNewPages < ZERO_NEW_PAGE_LIMIT;
+
+    // 進捗を通知
+    chrome.runtime.sendMessage({
+      type: 'COLLECTION_PROGRESS',
+      total: state.reviews.length,
+      currentPage: state.currentPage,
+      currentFilter: getFilterLabel(state.phase),
+      currentFilterKey: state.phase,
+      textReviewCount: state.textReviewCount || 0,
+      targetReviewCount: state.targetReviewCount || 0,
+      totalRatings: state.productInfo?.totalReviews || 0,
+      addedCount,
+      maxPages: state.displayTotalPages || maxPages,
+      zeroNewPages: state.zeroNewPages,
+    }).catch(() => {});
+    renderOverlay(state, {
+      stateKey: 'collecting',
+      addedCount,
+      maxPages: state.displayTotalPages || maxPages,
+      statusText: `${getFilterLabel(state.phase)} - ページ${state.currentPage}/${state.displayTotalPages || maxPages} を取得中`,
+    });
 
     console.log(
       `[ReviewAI] Pagination check: hasNext=${hasNextPage}, nextPage=${nextPageNum}, maxPages=${maxPages}, addedCount=${addedCount}, zeroNewPages=${state.zeroNewPages}, target=${state.targetReviewCount || 0}`
@@ -533,6 +872,12 @@
       const waitTime = randomDelay(8000, 12000);
       const filterUrl = buildReviewPageUrl(asin, 1, nextFilter);
       console.log(`[ReviewAI] Moving to supplemental filter ${nextFilter} after ${Math.round(waitTime / 1000)}s: ${filterUrl}`);
+      renderOverlay(state, {
+        stateKey: 'collecting',
+        maxPages: state.displayTotalPages || 1,
+        statusText: `${getFilterLabel(nextFilter)} の補完取得へ移行します`,
+        subtext: `現在 ${state.reviews.length}件 / 目標 ${state.targetReviewCount || '-'}件`,
+      });
       await new Promise((resolve) => setTimeout(resolve, waitTime));
       window.location.href = filterUrl;
       return;
@@ -558,6 +903,7 @@
       zeroNewPages: 0,
       pendingFilters: [],
       supplementAttempted: false,
+      displayTotalPages: 1,
       startedAt: new Date().toISOString(),
     };
   }
@@ -597,6 +943,11 @@
 
       // コレクション状態を初期化してレビューページに遷移
       const state = createInitialState(asin, info);
+      renderOverlay(state, {
+        stateKey: 'collecting',
+        statusText: 'レビュー取得を開始します',
+        subtext: 'レビューページへ移動しています',
+      });
 
       saveCollectionState(state).then(() => {
         const url = buildReviewPageUrl(asin, 1, 'all');

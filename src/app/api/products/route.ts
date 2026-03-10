@@ -1,31 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { validateAsin } from '@/lib/services/review-scraper'
-
-interface MockProduct {
-  id: string
-  asin: string
-  name: string
-  lastAnalyzedAt: string | null
-  averageRating: number | null
-  totalReviews: number | null
-  created_at: string
-}
-
-// Mock data store (replace with Supabase later)
-const mockProducts: MockProduct[] = [
-  {
-    id: '1',
-    asin: 'B0DEMOASIN',
-    name: 'シュワッシュ 炭酸シャンプー 200ml',
-    lastAnalyzedAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(),
-    averageRating: 3.6,
-    totalReviews: 15,
-    created_at: new Date().toISOString(),
-  },
-]
+import { addProduct, getProductByAsin, listProducts } from '@/lib/store/review-memory-store'
 
 export async function GET() {
-  return NextResponse.json({ products: mockProducts })
+  return NextResponse.json({ products: listProducts() })
 }
 
 export async function POST(request: NextRequest) {
@@ -44,20 +22,10 @@ export async function POST(request: NextRequest) {
     )
   }
 
-  // 重複チェック
-  if (mockProducts.some(p => p.asin === asin)) {
+  if (getProductByAsin(asin)) {
     return NextResponse.json({ error: 'この商品は既に登録されています' }, { status: 409 })
   }
 
-  const newProduct = {
-    id: crypto.randomUUID(),
-    asin,
-    name: name || `Amazon商品 ${asin}`,
-    lastAnalyzedAt: null,
-    averageRating: null,
-    totalReviews: null,
-    created_at: new Date().toISOString(),
-  }
-  mockProducts.push(newProduct)
+  const newProduct = addProduct({ asin, name })
   return NextResponse.json({ product: newProduct }, { status: 201 })
 }
