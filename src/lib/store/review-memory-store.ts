@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import type { ReviewAnalysisReport } from '@/lib/services/pox-analyzer'
+import type { ReviewCollection } from '@/lib/services/review-scraper'
 
 export interface StoredProduct {
   id: string
@@ -15,6 +16,7 @@ export interface StoredProduct {
 interface StoreShape {
   products: Record<string, StoredProduct>
   reports: Record<string, ReviewAnalysisReport>
+  collections: Record<string, ReviewCollection>
 }
 
 const STORE_DIR = path.join(process.cwd(), '.data')
@@ -34,6 +36,7 @@ function createDefaultStore(): StoreShape {
       },
     },
     reports: {},
+    collections: {},
   }
 }
 
@@ -56,6 +59,7 @@ function readStore(): StoreShape {
     return {
       products: parsed.products || createDefaultStore().products,
       reports: parsed.reports || {},
+      collections: parsed.collections || {},
     }
   } catch {
     const fallback = createDefaultStore()
@@ -116,6 +120,7 @@ export function saveAnalysisResult(input: {
   averageRating: number
   totalReviews: number
   report: ReviewAnalysisReport
+  collection: ReviewCollection
 }): StoredProduct {
   const store = readStore()
   const existing = store.products[input.asin]
@@ -131,6 +136,7 @@ export function saveAnalysisResult(input: {
 
   store.products[input.asin] = product
   store.reports[input.asin] = input.report
+  store.collections[input.asin] = input.collection
   writeStore(store)
   return product
 }
@@ -138,4 +144,9 @@ export function saveAnalysisResult(input: {
 export function getReportByAsin(asin: string): ReviewAnalysisReport | undefined {
   const store = readStore()
   return store.reports[asin]
+}
+
+export function getCollectionByAsin(asin: string): ReviewCollection | undefined {
+  const store = readStore()
+  return store.collections[asin]
 }

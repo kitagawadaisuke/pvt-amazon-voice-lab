@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { useSearchParams } from 'next/navigation'
+import type { CategoryDefinition } from '@/lib/services/pox-analyzer'
 
 interface Product {
   id: string
@@ -30,6 +31,7 @@ interface AnalysisReport {
   asin: string
   productName: string
   analyzedAt: string
+  categoryFramework: CategoryDefinition[]
   totalReviewsAnalyzed: number
   categoryBreakdown: CategoryBreakdown[]
   poxAnalysis: {
@@ -44,6 +46,50 @@ interface AnalysisReport {
   actionRecommendations: string[]
 }
 
+type CategoryEditorValue = CategoryDefinition
+
+const CATEGORY_TEMPLATES: Array<{
+  id: string
+  label: string
+  categories: CategoryEditorValue[]
+}> = [
+  {
+    id: 'electronics',
+    label: '電子機器・アクセサリ',
+    categories: [
+      { name: '互換性・対応機器', description: 'どの機器で使えるか、非対応条件、利用前の前提条件' },
+      { name: '装着・接続性', description: 'はめやすさ、接続しやすさ、手順のわかりやすさ、扱いやすさ' },
+      { name: '再生・動作品質', description: '認識精度、動作安定性、期待通りに機能するか' },
+      { name: '価格・コスパ', description: '価格の納得感、費用対効果、品質とのバランス' },
+    ],
+  },
+  {
+    id: 'beauty',
+    label: '美容・日用品',
+    categories: [
+      { name: '仕様・成分', description: '容量、成分、香り、容器など購入前に気にする情報' },
+      { name: '使用感', description: '使っている最中の感覚、刺激、扱いやすさ' },
+      { name: '効果実感', description: '継続利用での変化、期待した効果が得られたか' },
+      { name: '価格・コスパ', description: '価格の納得感、継続しやすさ、量に対する価値' },
+    ],
+  },
+  {
+    id: 'food',
+    label: '食品・サプリ',
+    categories: [
+      { name: '原材料・仕様', description: '原材料、容量、栄養成分など購入前提の情報' },
+      { name: '味・飲みやすさ', description: '味、香り、食べやすさ、飲みやすさ' },
+      { name: '体感・満足度', description: '継続利用での体感、満足度、期待との一致' },
+      { name: '価格・続けやすさ', description: '価格の納得感、継続購入のしやすさ、コスパ' },
+    ],
+  },
+  {
+    id: 'custom',
+    label: '現在の設定を使用',
+    categories: [],
+  },
+]
+
 const severityStyles = {
   high: 'bg-red-100 text-red-800',
   medium: 'bg-yellow-100 text-yellow-800',
@@ -56,9 +102,14 @@ export default function Dashboard() {
   const searchParams = useSearchParams()
   const [products, setProducts] = useState<Product[]>([])
   const [loadingReportId, setLoadingReportId] = useState<string | null>(null)
+  const [reanalyzing, setReanalyzing] = useState(false)
   const [report, setReport] = useState<AnalysisReport | null>(null)
   const [activeTab, setActiveTab] = useState<'products' | 'report'>('products')
+  const [editingCategories, setEditingCategories] = useState(false)
+  const [categoryEditorValues, setCategoryEditorValues] = useState<CategoryEditorValue[]>([])
+  const [selectedTemplateId, setSelectedTemplateId] = useState('custom')
   const [error, setError] = useState<string | null>(null)
+  const [shareMessage, setShareMessage] = useState<string | null>(null)
   const [userApiKey, setUserApiKey] = useState('')
   const [showSettings, setShowSettings] = useState(false)
 
@@ -71,6 +122,20 @@ export default function Dashboard() {
   useEffect(() => {
     fetch('/api/products').then(r => r.json()).then(d => setProducts(d.products))
   }, [])
+
+  useEffect(() => {
+    if (!report) return
+    setCategoryEditorValues(
+      (report.categoryFramework?.length ? report.categoryFramework : report.categoryBreakdown.map((item) => ({
+        name: item.category,
+        description: '',
+      }))).map((item) => ({
+        name: item.name,
+        description: item.description || '',
+      }))
+    )
+    setSelectedTemplateId('custom')
+  }, [report])
 
   useEffect(() => {
     const asin = searchParams.get('asin')
@@ -125,6 +190,7 @@ export default function Dashboard() {
       }
       setReport(data.report)
       setActiveTab('report')
+      window.history.replaceState({}, '', `/dashboard?asin=${encodeURIComponent(product.asin)}`)
     } catch (err) {
       setError(err instanceof Error ? err.message : '分析レポートが見つかりません')
     }
@@ -142,8 +208,147 @@ export default function Dashboard() {
     ? ((report.totalReviewsAnalyzed / totalRatingsCount) * 100).toFixed(1)
     : null
 
+  const updateCategoryName = (index: number, category: string) => {
+    if (!report) return
+    const nextBreakdown = report.categoryBreakdown.map((item, itemIndex) => (
+      itemIndex === index ? { ...item, category } : item
+    ))
+    setReport({ ...report, categoryBreakdown: nextBreakdown })
+    setCategoryEditorValues((current) => current.map((item, itemIndex) => (
+      itemIndex === index ? { ...item, name: category } : item
+    )))
+  }
+
+  const updateCategoryDescription = (index: number, description: string) => {
+    setCategoryEditorValues((current) => current.map((item, itemIndex) => (
+      itemIndex === index ? { ...item, description } : item
+    )))
+  }
+
+  const applyCategoryTemplate = (templateId: string) => {
+    setSelectedTemplateId(templateId)
+    if (templateId === 'custom') return
+
+    const template = CATEGORY_TEMPLATES.find((item) => item.id === templateId)
+    if (!template) return
+
+    setCategoryEditorValues(template.categories.map((category) => ({ ...category })))
+    if (!report) return
+    setReport({
+      ...report,
+      categoryBreakdown: report.categoryBreakdown.map((item, index) => ({
+        ...item,
+        category: template.categories[index]?.name || item.category,
+      })),
+      categoryFramework: template.categories.map((category) => ({ ...category })),
+    })
+  }
+
+  const rerunAnalysisWithCategories = async () => {
+    if (!report) return
+
+    setReanalyzing(true)
+    setError(null)
+    try {
+      const res = await fetch('/api/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          asin: report.asin,
+          apiKey: userApiKey || undefined,
+          customCategories: categoryEditorValues.map((item) => ({
+            name: item.name,
+            description: item.description,
+          })),
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        throw new Error(data.error || '再分析に失敗しました')
+      }
+      setReport(data.report)
+      setEditingCategories(false)
+      setSelectedTemplateId('custom')
+      window.history.replaceState({}, '', `/dashboard?asin=${encodeURIComponent(data.report.asin)}`)
+      const productsRes = await fetch('/api/products')
+      const productsData = await productsRes.json()
+      if (productsRes.ok) {
+        setProducts(productsData.products || [])
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '再分析に失敗しました')
+    }
+    setReanalyzing(false)
+  }
+
+  const copyShareLink = async () => {
+    if (!report) return
+
+    const shareUrl = `${window.location.origin}/dashboard?asin=${encodeURIComponent(report.asin)}`
+    try {
+      await navigator.clipboard.writeText(shareUrl)
+      setShareMessage('共有リンクをコピーしました')
+      window.setTimeout(() => setShareMessage(null), 2000)
+    } catch {
+      setShareMessage('共有リンクのコピーに失敗しました')
+      window.setTimeout(() => setShareMessage(null), 2000)
+    }
+  }
+
+  const printReport = () => {
+    window.print()
+  }
+
   return (
     <div className="min-h-screen bg-gray-50">
+      <style jsx global>{`
+        @media print {
+          body {
+            background: white !important;
+          }
+
+          header,
+          .print\\:hidden {
+            display: none !important;
+          }
+
+          main {
+            max-width: none !important;
+            padding: 0 !important;
+            margin: 0 !important;
+          }
+
+          .bg-gray-50 {
+            background: white !important;
+          }
+
+          .shadow-sm,
+          .shadow,
+          .shadow-md,
+          .shadow-lg {
+            box-shadow: none !important;
+          }
+
+          .border-gray-200,
+          .border-gray-100 {
+            border-color: #d1d5db !important;
+          }
+
+          .rounded-xl,
+          .rounded-lg {
+            border-radius: 0.5rem !important;
+          }
+
+          .space-y-6 > * + *,
+          .space-y-3 > * + * {
+            margin-top: 1rem !important;
+          }
+
+          .break-inside-avoid {
+            break-inside: avoid;
+          }
+        }
+      `}</style>
       {/* Header */}
       <header className="bg-white border-b border-gray-200">
         <div className="max-w-6xl mx-auto px-4 py-4 flex items-center justify-between">
@@ -202,7 +407,7 @@ export default function Dashboard() {
 
       <main className="max-w-6xl mx-auto px-4 py-8">
         {/* Tabs */}
-        <div className="flex gap-1 mb-6 bg-gray-100 p-1 rounded-lg w-fit">
+        <div className="flex gap-1 mb-6 bg-gray-100 p-1 rounded-lg w-fit print:hidden">
           <button
             onClick={() => setActiveTab('products')}
             className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
@@ -291,14 +496,35 @@ export default function Dashboard() {
         {activeTab === 'report' && report && (
           <div className="space-y-6">
             {/* Report Header */}
-            <div className="bg-white rounded-xl border border-gray-200 p-6">
+            <div className="bg-white rounded-xl border border-gray-200 p-6 break-inside-avoid">
               <div className="flex items-center justify-between mb-2">
                 <h2 className="text-xl font-bold text-gray-900">{report.productName}</h2>
+                <div className="flex items-center gap-2 print:hidden">
+                  <button
+                    onClick={copyShareLink}
+                    className="px-3 py-1.5 text-sm font-medium text-blue-700 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors"
+                  >
+                    共有リンクをコピー
+                  </button>
+                  <button
+                    onClick={printReport}
+                    className="px-3 py-1.5 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors"
+                  >
+                    印刷 / PDF保存
+                  </button>
+                </div>
+              </div>
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-sm text-gray-500 font-mono">ASIN: {report.asin}</p>
                 <span className="text-xs text-gray-400">
                   {new Date(report.analyzedAt).toLocaleString('ja-JP')} / {report.totalReviewsAnalyzed}件分析
                 </span>
               </div>
-              <p className="text-sm text-gray-500 font-mono">ASIN: {report.asin}</p>
+              {shareMessage && (
+                <div className="mt-3 rounded-lg bg-blue-50 px-3 py-2 text-sm text-blue-700 print:hidden">
+                  {shareMessage}
+                </div>
+              )}
               <div className="grid gap-3 md:grid-cols-3 mt-4">
                 <div className="rounded-lg border border-gray-100 bg-gray-50 p-4">
                   <div className="text-xs text-gray-500 mb-1">総評価数</div>
@@ -320,13 +546,77 @@ export default function Dashboard() {
             </div>
 
             {/* Category Breakdown (Step A) */}
-            <div className="bg-white rounded-xl border border-gray-200 p-6">
-              <h3 className="text-lg font-semibold text-gray-900 mb-4">Step A: レビュー構造化分析</h3>
+            <div className="bg-white rounded-xl border border-gray-200 p-6 break-inside-avoid">
+              <div className="flex items-center justify-between mb-4 gap-4">
+                <h3 className="text-lg font-semibold text-gray-900">Step A: レビュー構造化分析</h3>
+                <div className="flex items-center gap-2">
+                  {editingCategories && (
+                    <select
+                      value={selectedTemplateId}
+                      onChange={(e) => applyCategoryTemplate(e.target.value)}
+                      className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    >
+                      {CATEGORY_TEMPLATES.map((template) => (
+                        <option key={template.id} value={template.id}>{template.label}</option>
+                      ))}
+                    </select>
+                  )}
+                  <button
+                    onClick={() => setEditingCategories(prev => !prev)}
+                    className="px-3 py-1.5 text-sm font-medium text-blue-700 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors"
+                  >
+                    {editingCategories ? '編集完了' : 'カテゴリ名を編集'}
+                  </button>
+                  {editingCategories && (
+                    <button
+                      onClick={rerunAnalysisWithCategories}
+                      disabled={reanalyzing}
+                      className="px-3 py-1.5 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50"
+                    >
+                      {reanalyzing ? '再分析中...' : 'このカテゴリで再分析'}
+                    </button>
+                  )}
+                </div>
+              </div>
+              <div className="mb-6 rounded-xl border border-gray-100 bg-gradient-to-br from-slate-50 to-white p-4">
+                <div className="mb-3 flex items-center justify-between">
+                  <div>
+                    <h4 className="text-sm font-semibold text-gray-900">カテゴリ比較グラフ</h4>
+                    <p className="text-xs text-gray-500">どの論点にレビュー言及が集中しているかを比較</p>
+                  </div>
+                  <span className="text-xs text-gray-400">言及率ベース</span>
+                </div>
+                <div className="space-y-3">
+                  {report.categoryBreakdown.map((cat, i) => (
+                    <div key={`chart-${i}`} className="grid grid-cols-[minmax(0,180px)_1fr_56px] items-center gap-3">
+                      <div className="truncate text-sm font-medium text-gray-700">{cat.category}</div>
+                      <div className="relative h-4 overflow-hidden rounded-full bg-gray-100">
+                        <div
+                          className="h-full rounded-full bg-gradient-to-r from-blue-500 via-cyan-500 to-emerald-400 transition-all"
+                          style={{ width: `${cat.mentionRate}%` }}
+                        />
+                      </div>
+                      <div className="text-right text-sm font-semibold text-blue-600">{cat.mentionRate}%</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
               <div className="grid md:grid-cols-2 gap-4">
                 {report.categoryBreakdown.map((cat, i) => (
                   <div key={i} className="border border-gray-100 rounded-lg p-4">
                     <div className="flex items-center justify-between mb-2">
-                      <span className="font-medium text-sm">{cat.category}</span>
+                      {editingCategories ? (
+                        <div className="flex-1 pr-3">
+                          <input
+                            type="text"
+                            value={categoryEditorValues[i]?.name || cat.category}
+                            onChange={(e) => updateCategoryName(i, e.target.value)}
+                            className="w-full max-w-full rounded border border-gray-300 px-2 py-1 text-sm font-medium text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          />
+                        </div>
+                      ) : (
+                        <span className="font-medium text-sm">{cat.category}</span>
+                      )}
                       <span className="text-sm font-bold text-blue-600">{cat.mentionRate}%</span>
                     </div>
                     <div className="w-full bg-gray-100 rounded-full h-2 mb-3">
@@ -335,6 +625,14 @@ export default function Dashboard() {
                         style={{ width: `${cat.mentionRate}%` }}
                       />
                     </div>
+                    {editingCategories && (
+                      <textarea
+                        value={categoryEditorValues[i]?.description || ''}
+                        onChange={(e) => updateCategoryDescription(i, e.target.value)}
+                        placeholder="このカテゴリで何を見たいかを入力してください"
+                        className="mb-3 min-h-20 w-full rounded border border-gray-300 px-3 py-2 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      />
+                    )}
                     <div className="flex flex-wrap gap-1">
                       {cat.topMentions.map((mention, j) => (
                         <span key={j} className="px-2 py-0.5 bg-gray-50 text-gray-600 text-xs rounded">
@@ -348,7 +646,7 @@ export default function Dashboard() {
             </div>
 
             {/* POX Analysis (Step B) */}
-            <div className="bg-white rounded-xl border border-gray-200 p-6">
+            <div className="bg-white rounded-xl border border-gray-200 p-6 break-inside-avoid">
               <h3 className="text-lg font-semibold text-gray-900 mb-4">Step B: POX分析</h3>
               <div className="space-y-6">
                 {/* Pod */}
@@ -432,9 +730,9 @@ export default function Dashboard() {
             </div>
 
             {/* Insights Summary (Step C) */}
-            <div className="grid md:grid-cols-2 gap-6">
+              <div className="grid md:grid-cols-2 gap-6">
               {/* Pain Points */}
-              <div className="bg-white rounded-xl border border-gray-200 p-6">
+              <div className="bg-white rounded-xl border border-gray-200 p-6 break-inside-avoid">
                 <h3 className="text-base font-semibold text-gray-900 mb-3">不満 TOP5</h3>
                 <div className="space-y-2">
                   {report.painPoints.map((pain, i) => (
@@ -455,7 +753,7 @@ export default function Dashboard() {
               </div>
 
               {/* Satisfaction Points */}
-              <div className="bg-white rounded-xl border border-gray-200 p-6">
+              <div className="bg-white rounded-xl border border-gray-200 p-6 break-inside-avoid">
                 <h3 className="text-base font-semibold text-gray-900 mb-3">満足 TOP5</h3>
                 <div className="space-y-2">
                   {report.satisfactionPoints.map((sat, i) => (
@@ -471,7 +769,7 @@ export default function Dashboard() {
               </div>
 
               {/* Unmet Needs */}
-              <div className="bg-white rounded-xl border border-gray-200 p-6">
+              <div className="bg-white rounded-xl border border-gray-200 p-6 break-inside-avoid">
                 <h3 className="text-base font-semibold text-gray-900 mb-3">未充足ニーズ</h3>
                 <ul className="space-y-1.5">
                   {report.unmetNeeds.map((need, i) => (
@@ -484,7 +782,7 @@ export default function Dashboard() {
               </div>
 
               {/* Price Sentiment */}
-              <div className="bg-white rounded-xl border border-gray-200 p-6">
+              <div className="bg-white rounded-xl border border-gray-200 p-6 break-inside-avoid">
                 <h3 className="text-base font-semibold text-gray-900 mb-3">価格感度</h3>
                 <div className="space-y-3">
                   <div>
@@ -519,7 +817,7 @@ export default function Dashboard() {
             </div>
 
             {/* Action Recommendations */}
-            <div className="bg-white rounded-xl border border-gray-200 p-6">
+            <div className="bg-white rounded-xl border border-gray-200 p-6 break-inside-avoid">
               <h3 className="text-lg font-semibold text-gray-900 mb-4">推奨アクション</h3>
               <div className="space-y-3">
                 {report.actionRecommendations.map((action, i) => (

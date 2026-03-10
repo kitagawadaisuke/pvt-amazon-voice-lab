@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { fetchReviews, validateAsin, ReviewCollection } from '@/lib/services/review-scraper'
 import { analyzeReviews } from '@/lib/services/pox-analyzer'
-import { saveAnalysisResult } from '@/lib/store/review-memory-store'
+import { getCollectionByAsin, saveAnalysisResult } from '@/lib/store/review-memory-store'
 
 // CORS headers for Chrome extension
 const corsHeaders = {
@@ -16,7 +16,7 @@ export async function OPTIONS() {
 
 export async function POST(request: NextRequest) {
   const body = await request.json()
-  const { asin: rawAsin, apiKey: userApiKey, source, reviews: extensionReviews } = body
+  const { asin: rawAsin, apiKey: userApiKey, source, reviews: extensionReviews, customCategories } = body
 
   // Chrome拡張からのデータ受信
   if (source === 'chrome_extension' && extensionReviews) {
@@ -38,13 +38,14 @@ export async function POST(request: NextRequest) {
 
       console.log(`Chrome拡張からレビュー受信: ${reviewCollection.reviews.length}件 (low: ${reviewCollection.lowRatingReviews.length}, high: ${reviewCollection.highRatingReviews.length})`)
 
-      const report = await analyzeReviews(reviewCollection, userApiKey)
+      const report = await analyzeReviews(reviewCollection, userApiKey, { customCategories })
       saveAnalysisResult({
         asin: reviewCollection.asin,
         productName: reviewCollection.productName,
         averageRating: reviewCollection.averageRating,
         totalReviews: reviewCollection.totalReviews,
         report,
+        collection: reviewCollection,
       })
 
       return NextResponse.json({
@@ -79,14 +80,15 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const reviews = await fetchReviews(asin)
-    const report = await analyzeReviews(reviews, userApiKey)
+    const reviews = getCollectionByAsin(asin) || await fetchReviews(asin)
+    const report = await analyzeReviews(reviews, userApiKey, { customCategories })
     saveAnalysisResult({
       asin: reviews.asin,
       productName: reviews.productName,
       averageRating: reviews.averageRating,
       totalReviews: reviews.totalReviews,
       report,
+      collection: reviews,
     })
 
     return NextResponse.json({
