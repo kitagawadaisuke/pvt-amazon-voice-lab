@@ -141,7 +141,7 @@
 </head>
 <body>
   <div class="header">
-    <h1>📊 ReviewAI</h1>
+    <h1>📊 Amazon Voice Lab</h1>
   </div>
 
   <div id="statusBox" class="status info">
@@ -193,11 +193,14 @@
 
   <button id="startBtn" class="btn-primary" style="display:none;">レビューを取得する</button>
   <button id="stopBtn" class="btn-stop" style="display:none;">取得を中止</button>
-  <button id="analyzeBtn" class="btn-analyze" style="display:none;">POX分析を実行する</button>
   <button id="resetBtn" style="display:none; width:100%; padding:6px; border:1px solid #475569; border-radius:6px; background:transparent; color:#94a3b8; font-size:12px; cursor:pointer; margin-top:8px;">データをリセット</button>
 
+  <div style="margin-top:12px; padding:10px; background:#1e293b; border:1px solid #334155; border-radius:8px; font-size:11px; color:#94a3b8; line-height:1.5;">
+    ⚠ 一度に取得できるのは1商品ずつです。取得中に別の商品で開始しないでください。
+  </div>
+
   <div class="settings">
-    <label>ReviewAI サーバーURL</label>
+    <label>Amazon Voice Lab サーバーURL</label>
     <input type="text" id="serverUrl" placeholder="http://localhost:3000" />
   </div>
 

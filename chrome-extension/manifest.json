@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "ReviewAI - Amazonレビュー分析",
+  "name": "Amazon Voice Lab - Amazonレビュー分析",
   "version": "0.1.0",
-  "description": "Amazonの商品レビューを自動取得してPOX分析を行うChrome拡張",
+  "description": "Amazonレビューを収集し、商品企画と訴求設計に活かすChrome拡張",
   "permissions": ["activeTab", "storage"],
   "action": {
     "default_popup": "popup.html",

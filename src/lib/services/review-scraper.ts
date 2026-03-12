@@ -19,6 +19,11 @@ export interface ReviewCollection {
   asin: string
   productName: string
   totalReviews: number
+  reviewListCount?: number
+  starFetchStats?: Partial<Record<'five_star' | 'four_star' | 'three_star' | 'two_star' | 'one_star', {
+    available: number
+    fetched: number
+  }>>
   averageRating: number
   ratingBreakdown: { [key: number]: number }
   reviews: AmazonReview[]
@@ -28,6 +33,7 @@ export interface ReviewCollection {
   fetchedCount: number
   source: ReviewSource
   warnings: string[]
+  price?: number | null
 }
 
 class ReviewFetchError extends Error {

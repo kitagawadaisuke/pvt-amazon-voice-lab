@@ -16,7 +16,7 @@ export async function OPTIONS() {
 
 export async function POST(request: NextRequest) {
   const body = await request.json()
-  const { asin: rawAsin, apiKey: userApiKey, source, reviews: extensionReviews, customCategories } = body
+  const { asin: rawAsin, apiKey: userApiKey, source, reviews: extensionReviews, customCategories, poxGuidance, analysisDepth } = body
 
   // Chrome拡張からのデータ受信
   if (source === 'chrome_extension' && extensionReviews) {
@@ -25,6 +25,8 @@ export async function POST(request: NextRequest) {
         asin: extensionReviews.asin,
         productName: extensionReviews.productName,
         totalReviews: extensionReviews.totalReviews,
+        reviewListCount: extensionReviews.reviewListCount || extensionReviews.textReviewCount || (extensionReviews.reviews || []).length,
+        starFetchStats: extensionReviews.starFetchStats || {},
         averageRating: extensionReviews.averageRating,
         ratingBreakdown: extensionReviews.ratingBreakdown || calculateBreakdown(extensionReviews.reviews || []),
         reviews: extensionReviews.reviews || [],
@@ -34,11 +36,12 @@ export async function POST(request: NextRequest) {
         fetchedCount: extensionReviews.fetchedCount || (extensionReviews.reviews || []).length,
         source: extensionReviews.source || 'mock',
         warnings: extensionReviews.warnings || [],
+        price: extensionReviews.price ?? null,
       }
 
       console.log(`Chrome拡張からレビュー受信: ${reviewCollection.reviews.length}件 (low: ${reviewCollection.lowRatingReviews.length}, high: ${reviewCollection.highRatingReviews.length})`)
 
-      const report = await analyzeReviews(reviewCollection, userApiKey, { customCategories })
+      const report = await analyzeReviews(reviewCollection, userApiKey, { customCategories, poxGuidance, analysisDepth })
       saveAnalysisResult({
         asin: reviewCollection.asin,
         productName: reviewCollection.productName,
@@ -81,7 +84,7 @@ export async function POST(request: NextRequest) {
 
   try {
     const reviews = getCollectionByAsin(asin) || await fetchReviews(asin)
-    const report = await analyzeReviews(reviews, userApiKey, { customCategories })
+    const report = await analyzeReviews(reviews, userApiKey, { customCategories, poxGuidance, analysisDepth })
     saveAnalysisResult({
       asin: reviews.asin,
       productName: reviews.productName,

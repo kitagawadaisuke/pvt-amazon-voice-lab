@@ -10,6 +10,7 @@ export interface StoredProduct {
   lastAnalyzedAt: string | null
   averageRating: number | null
   totalReviews: number | null
+  price?: number | null
   created_at: string
 }
 
@@ -131,6 +132,7 @@ export function saveAnalysisResult(input: {
     lastAnalyzedAt: input.report.analyzedAt,
     averageRating: input.averageRating,
     totalReviews: input.totalReviews,
+    price: input.collection.price ?? existing?.price ?? null,
     created_at: existing?.created_at || new Date().toISOString(),
   }
 
@@ -149,4 +151,19 @@ export function getReportByAsin(asin: string): ReviewAnalysisReport | undefined 
 export function getCollectionByAsin(asin: string): ReviewCollection | undefined {
   const store = readStore()
   return store.collections[asin]
+}
+
+export function updateReportNotes(asin: string, notes: string): ReviewAnalysisReport | undefined {
+  const store = readStore()
+  const report = store.reports[asin]
+  if (!report) return undefined
+
+  const updatedReport: ReviewAnalysisReport = {
+    ...report,
+    notes,
+  }
+
+  store.reports[asin] = updatedReport
+  writeStore(store)
+  return updatedReport
 }

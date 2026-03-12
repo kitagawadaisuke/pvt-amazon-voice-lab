@@ -14,12 +14,19 @@ const textReviewMeta = document.getElementById('textReviewMeta');
 const addedCountMeta = document.getElementById('addedCountMeta');
 const startBtn = document.getElementById('startBtn');
 const stopBtn = document.getElementById('stopBtn');
-const analyzeBtn = document.getElementById('analyzeBtn');
 const serverUrlInput = document.getElementById('serverUrl');
 
 let currentTabId = null;
 let currentProductInfo = null;
 let currentCollectedReviews = [];
+
+function isAmazonPage(url) {
+  return !!url && (url.includes('amazon.co.jp') || url.includes('amazon.com'));
+}
+
+function isSameProduct(left, right) {
+  return !!left?.asin && !!right?.asin && left.asin === right.asin;
+}
 
 // 設定を読み込み
 chrome.storage.local.get(['serverUrl'], (result) => {
@@ -43,10 +50,27 @@ async function checkCollectionStatus() {
 async function init() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   currentTabId = tab.id;
+  const onAmazonPage = isAmazonPage(tab.url);
+  let currentPageInfo = null;
+
+  if (onAmazonPage) {
+    try {
+      const response = await chrome.tabs.sendMessage(currentTabId, { type: 'GET_PAGE_INFO' });
+      currentPageInfo = response?.productInfo || null;
+      if (currentPageInfo) {
+        currentProductInfo = currentPageInfo;
+        showProductInfo(currentPageInfo);
+      }
+    } catch {
+      currentPageInfo = null;
+    }
+  }
 
   // まずコレクション状態を確認
   const state = await checkCollectionStatus();
-  if (state && state.blocked) {
+  const stateMatchesCurrentPage = isSameProduct(state?.productInfo, currentPageInfo);
+
+  if (state && state.blocked && (!onAmazonPage || stateMatchesCurrentPage)) {
     currentProductInfo = state.productInfo;
     currentCollectedReviews = state.reviews || [];
     if (state.productInfo) showProductInfo(state.productInfo);
@@ -63,14 +87,35 @@ async function init() {
       addedCount: 0,
     });
     setStatus(state.blockReason || 'Amazon側のブロックを検知しました', 'error');
-    analyzeBtn.style.display = currentCollectedReviews.length > 0 ? 'block' : 'none';
     resetBtn.style.display = 'block';
     startBtn.style.display = 'block';
     stopBtn.style.display = 'none';
     return;
   }
 
-  if (state && state.collecting) {
+  if (state && state.analyzing && (!onAmazonPage || stateMatchesCurrentPage)) {
+    currentProductInfo = state.productInfo;
+    currentCollectedReviews = state.reviews || [];
+    if (state.productInfo) showProductInfo(state.productInfo);
+    progressSection.style.display = 'block';
+    reviewCount.textContent = `${currentCollectedReviews.length}件`;
+    progressFill.style.width = '100%';
+    progressText.textContent = 'レビュー取得完了 / POX分析を自動実行中';
+    renderProgressMeta({
+      total: currentCollectedReviews.length,
+      currentPage: state.currentPage || '-',
+      maxPages: state.currentPage || '-',
+      textReviewCount: state.textReviewCount || currentCollectedReviews.length,
+      targetReviewCount: state.targetReviewCount || 0,
+      addedCount: 0,
+    });
+    setStatus('POX分析を自動で実行しています。しばらくお待ちください', 'collecting');
+    resetBtn.style.display = 'none';
+    stopBtn.style.display = 'none';
+    return;
+  }
+
+  if (state && state.collecting && (!onAmazonPage || stateMatchesCurrentPage)) {
     // 収集中
     currentProductInfo = state.productInfo;
     currentCollectedReviews = state.reviews || [];
@@ -93,7 +138,7 @@ async function init() {
     return;
   }
 
-  if (state && !state.collecting && state.reviews && state.reviews.length > 0) {
+  if (state && !state.collecting && state.reviews && state.reviews.length > 0 && (!onAmazonPage || stateMatchesCurrentPage)) {
     // 収集完了済み
     currentProductInfo = state.productInfo;
     currentCollectedReviews = state.reviews || [];
@@ -101,7 +146,7 @@ async function init() {
     progressSection.style.display = 'block';
     reviewCount.textContent = `${currentCollectedReviews.length}件`;
     progressFill.style.width = '100%';
-    progressText.textContent = '取得完了';
+    progressText.textContent = 'レビュー取得完了 / レポート確認可能';
     renderProgressMeta({
       total: currentCollectedReviews.length,
       currentPage: state.currentPage || '-',
@@ -110,26 +155,33 @@ async function init() {
       targetReviewCount: state.targetReviewCount || 0,
       addedCount: 0,
     });
-    setStatus(`${state.reviews.length}件のレビューを取得しました`, 'success');
-    analyzeBtn.style.display = 'block';
+    setStatus(`${state.reviews.length}件のレビュー取得とPOX分析が完了しています`, 'success');
     resetBtn.style.display = 'block';
     return;
   }
 
-  if (!tab.url || (!tab.url.includes('amazon.co.jp') && !tab.url.includes('amazon.com'))) {
+  if (state && state.reviews && state.reviews.length > 0 && onAmazonPage && currentPageInfo && !stateMatchesCurrentPage) {
+    progressSection.style.display = 'none';
+    resetBtn.style.display = 'none';
+    stopBtn.style.display = 'none';
+    if (currentPageInfo.totalReviews > 0) {
+      setStatus(`レビュー ${currentPageInfo.totalReviews}件 取得可能`, 'info');
+      startBtn.style.display = 'block';
+    } else {
+      setStatus('この商品にはレビューがありません', 'info');
+    }
+    return;
+  }
+
+  if (!onAmazonPage) {
     setStatus('Amazon商品ページを開いてください', 'info');
     return;
   }
 
   try {
-    const response = await chrome.tabs.sendMessage(currentTabId, { type: 'GET_PAGE_INFO' });
-
-    if (response.productInfo) {
-      currentProductInfo = response.productInfo;
-      showProductInfo(response.productInfo);
-
-      if (response.productInfo.totalReviews > 0) {
-        setStatus(`レビュー ${response.productInfo.totalReviews}件 取得可能`, 'info');
+    if (currentPageInfo) {
+      if (currentPageInfo.totalReviews > 0) {
+        setStatus(`レビュー ${currentPageInfo.totalReviews}件 取得可能`, 'info');
         startBtn.style.display = 'block';
       } else {
         setStatus('この商品にはレビューがありません', 'info');
@@ -185,13 +237,15 @@ function renderProgressMeta({
 }
 
 // レビュー取得開始
-startBtn.addEventListener('click', async () => {
+  startBtn.addEventListener('click', async () => {
   startBtn.style.display = 'none';
   stopBtn.style.display = 'block';
+  resetBtn.style.display = 'none';
   progressSection.style.display = 'block';
   setStatus('レビューページに移動中...', 'collecting');
 
   try {
+    await chrome.storage.local.remove(['reviewai_state']);
     await chrome.tabs.sendMessage(currentTabId, { type: 'START_COLLECTION' });
   } catch {
     setStatus('取得に失敗しました。ページを再読み込みしてください', 'error');
@@ -255,7 +309,7 @@ chrome.runtime.onMessage.addListener((msg) => {
     stopBtn.style.display = 'none';
     reviewCount.textContent = `${currentCollectedReviews.length}件`;
     progressFill.style.width = '100%';
-    progressText.textContent = '取得完了';
+    progressText.textContent = 'レビュー取得完了 / POX分析を自動実行中';
     renderProgressMeta({
       total: currentCollectedReviews.length,
       currentPage: currentPageMeta.textContent.split('/')[0] || '-',
@@ -264,9 +318,8 @@ chrome.runtime.onMessage.addListener((msg) => {
       targetReviewCount: 0,
       addedCount: 0,
     });
-    setStatus(`${currentCollectedReviews.length}件のレビューを取得しました`, 'success');
-    analyzeBtn.style.display = 'block';
-    resetBtn.style.display = 'block';
+    setStatus(`${currentCollectedReviews.length}件のレビューを取得しました。自動でPOX分析を開始しています`, 'collecting');
+    resetBtn.style.display = 'none';
     currentProductInfo = msg.productInfo;
   }
 
@@ -276,62 +329,23 @@ chrome.runtime.onMessage.addListener((msg) => {
     startBtn.style.display = 'block';
     setStatus(msg.reason || 'Amazon側のアクセス制限を検知しました', 'error');
   }
-});
+  if (msg.type === 'ANALYSIS_STARTED') {
+    progressText.textContent = 'レビュー取得完了 / POX分析を自動実行中';
+    setStatus('POX分析を自動で実行しています。しばらくお待ちください', 'collecting');
+    stopBtn.style.display = 'none';
+    resetBtn.style.display = 'none';
+  }
 
-// POX分析を実行
-analyzeBtn.addEventListener('click', async () => {
-  const serverUrl = serverUrlInput.value.replace(/\/$/, '');
-  analyzeBtn.disabled = true;
-  analyzeBtn.textContent = '分析中...';
-  setStatus('ReviewAIサーバーにデータを送信中...', 'collecting');
+  if (msg.type === 'ANALYSIS_COMPLETE') {
+    progressText.textContent = 'POX分析完了 / レポートを表示しました';
+    setStatus('POX分析が完了しました。ダッシュボードを開いています', 'success');
+    resetBtn.style.display = 'block';
+  }
 
-  // storageから最新データを取得
-  const state = await checkCollectionStatus();
-  const collected = state?.reviews || currentCollectedReviews;
-  const pInfo = state?.productInfo || currentProductInfo;
-
-  // 低評価・高評価に分類
-  const lowRating = collected.filter((r) => r.rating <= 2);
-  const highRating = collected.filter((r) => r.rating >= 4);
-
-  const payload = {
-    asin: pInfo?.asin,
-    source: 'chrome_extension',
-    reviews: {
-      asin: pInfo?.asin,
-      productName: pInfo?.title,
-      totalReviews: pInfo?.totalReviews || collected.length,
-      averageRating: pInfo?.rating || 0,
-      reviews: collected,
-      lowRatingReviews: lowRating,
-      highRatingReviews: highRating,
-      fetchedAt: new Date().toISOString(),
-    },
-  };
-
-  try {
-    const response = await fetch(`${serverUrl}/api/analyze`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-
-    if (!response.ok) throw new Error(`Server error: ${response.status}`);
-
-    await response.json();
-    setStatus('分析完了！ダッシュボードで結果を確認してください', 'success');
-    analyzeBtn.textContent = '分析完了 ✓';
-
-    // storageをクリア
-    chrome.storage.local.remove(['reviewai_state']);
-
-    // ダッシュボードを開く
-    chrome.tabs.create({ url: `${serverUrl}/dashboard?asin=${pInfo?.asin}` });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'unknown error';
-    setStatus(`サーバー接続エラー: ${message}`, 'error');
-    analyzeBtn.disabled = false;
-    analyzeBtn.textContent = 'POX分析を実行する';
+  if (msg.type === 'ANALYSIS_FAILED') {
+    progressText.textContent = 'POX分析に失敗';
+    setStatus(`POX分析に失敗しました: ${msg.error || 'unknown error'}`, 'error');
+    resetBtn.style.display = 'block';
   }
 });
 
@@ -341,7 +355,6 @@ resetBtn.addEventListener('click', () => {
   chrome.storage.local.remove(['reviewai_state'], () => {
     setStatus('データをリセットしました', 'info');
     progressSection.style.display = 'none';
-    analyzeBtn.style.display = 'none';
     stopBtn.style.display = 'none';
     resetBtn.style.display = 'none';
     startBtn.style.display = 'block';
