@@ -16,6 +16,9 @@ const startBtn = document.getElementById('startBtn');
 const stopBtn = document.getElementById('stopBtn');
 const serverUrlInput = document.getElementById('serverUrl');
 
+const SUPABASE_URL = 'https://ajujveerddffossdrwmr.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFqdWp2ZWVyZGRmZm9zc2Ryd21yIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMzNjYwMjUsImV4cCI6MjA4ODk0MjAyNX0.CVJEqxgFpoW8D87zq8dYpWUYISvAKAKZUphFJ2YUy3Q';
+
 let currentTabId = null;
 let currentProductInfo = null;
 let currentCollectedReviews = [];
@@ -35,6 +38,78 @@ chrome.storage.local.get(['serverUrl'], (result) => {
 
 serverUrlInput.addEventListener('change', () => {
   chrome.storage.local.set({ serverUrl: serverUrlInput.value });
+});
+
+// --- Google認証 ---
+function showAuthUI(state) {
+  const loading = document.getElementById('authLoading');
+  const loggedOut = document.getElementById('authLoggedOut');
+  const loggedIn = document.getElementById('authLoggedIn');
+  if (state === 'loading') {
+    loading.style.display = 'block';
+    loggedOut.style.display = 'none';
+    loggedIn.style.display = 'none';
+  } else if (state === 'loggedout') {
+    loading.style.display = 'none';
+    loggedOut.style.display = 'block';
+    loggedIn.style.display = 'none';
+  } else if (state === 'loggedin') {
+    loading.style.display = 'none';
+    loggedOut.style.display = 'none';
+    loggedIn.style.display = 'block';
+  }
+}
+
+async function checkAuthState() {
+  showAuthUI('loading');
+  const { accessToken, refreshToken, userEmail } = await new Promise((resolve) =>
+    chrome.storage.local.get(['accessToken', 'refreshToken', 'userEmail'], resolve)
+  );
+  if (accessToken && refreshToken) {
+    document.getElementById('authEmail').textContent = userEmail || '';
+    showAuthUI('loggedin');
+  } else {
+    showAuthUI('loggedout');
+  }
+}
+
+document.getElementById('googleLoginBtn').addEventListener('click', async () => {
+  const redirectUrl = chrome.identity.getRedirectURL();
+  const authUrl = `${SUPABASE_URL}/auth/v1/authorize?provider=google&redirect_to=${encodeURIComponent(redirectUrl)}`;
+  chrome.identity.launchWebAuthFlow({ url: authUrl, interactive: true }, async (responseUrl) => {
+    if (chrome.runtime.lastError || !responseUrl) {
+      setStatus('ログインに失敗しました', 'error');
+      showAuthUI('loggedout');
+      return;
+    }
+    const hash = responseUrl.split('#')[1] || '';
+    const params = new URLSearchParams(hash);
+    const accessToken = params.get('access_token');
+    const refreshToken = params.get('refresh_token');
+    if (!accessToken || !refreshToken) {
+      setStatus('トークン取得に失敗しました', 'error');
+      showAuthUI('loggedout');
+      return;
+    }
+    // メールアドレス取得
+    let userEmail = '';
+    try {
+      const res = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+        headers: { Authorization: `Bearer ${accessToken}`, apikey: SUPABASE_ANON_KEY },
+      });
+      const data = await res.json();
+      userEmail = data.email || '';
+    } catch {}
+    chrome.storage.local.set({ accessToken, refreshToken, userEmail });
+    document.getElementById('authEmail').textContent = userEmail;
+    showAuthUI('loggedin');
+    setStatus('ログインしました', 'success');
+  });
+});
+
+document.getElementById('logoutBtn').addEventListener('click', () => {
+  chrome.storage.local.remove(['accessToken', 'refreshToken', 'userEmail']);
+  showAuthUI('loggedout');
 });
 
 // コレクション状態を確認
@@ -361,4 +436,5 @@ resetBtn.addEventListener('click', () => {
   });
 });
 
+checkAuthState();
 init();

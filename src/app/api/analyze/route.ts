@@ -3,27 +3,50 @@ import { fetchReviews, validateAsin, ReviewCollection } from '@/lib/services/rev
 import { analyzeReviews } from '@/lib/services/pox-analyzer'
 import { getCollectionByAsin, saveAnalysisResult } from '@/lib/store/review-memory-store'
 import { createClient } from '@/lib/supabase/server'
+import { createAdminClient } from '@/lib/supabase/admin'
 import { checkUsage, PLANS } from '@/lib/plans'
 import type { Plan } from '@/types/database'
 
-// CORS headers for Chrome extension
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type',
+function getCorsHeaders(request: NextRequest) {
+  const origin = request.headers.get('origin') || ''
+  const allowed =
+    origin.startsWith('chrome-extension://') ||
+    origin.startsWith('http://localhost') ||
+    origin.includes('amazon.co.jp') ||
+    origin.includes('amazon.com')
+  return {
+    'Access-Control-Allow-Origin': allowed ? origin : 'null',
+    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    'Access-Control-Allow-Credentials': 'true',
+  }
 }
 
-export async function OPTIONS() {
-  return NextResponse.json({}, { headers: corsHeaders })
+export async function OPTIONS(request: NextRequest) {
+  return NextResponse.json({}, { headers: getCorsHeaders(request) })
 }
 
 export async function POST(request: NextRequest) {
+  const corsHeaders = getCorsHeaders(request)
   const body = await request.json()
   const { asin: rawAsin, apiKey: userApiKey, source, reviews: extensionReviews, customCategories, poxGuidance, analysisDepth } = body
 
   // --- 認証 & 使用量チェック ---
   const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
+  const admin = createAdminClient()
+  let { data: { user } } = await supabase.auth.getUser()
+  let useBearerAuth = false
+
+  // Cookie認証が失敗した場合、Authorization: Bearer <token> を試みる
+  if (!user) {
+    const authHeader = request.headers.get('authorization')
+    if (authHeader?.startsWith('Bearer ')) {
+      const token = authHeader.slice(7)
+      const { data } = await admin.auth.getUser(token)
+      user = data.user
+      useBearerAuth = true
+    }
+  }
 
   if (!user) {
     return NextResponse.json(
@@ -111,7 +134,8 @@ export async function POST(request: NextRequest) {
 
       // 使用量記録（モック分析は除外）
       if (!report.isMock) {
-        await supabase.from('analysis_usage').insert({
+        const db = useBearerAuth ? admin : supabase
+        await db.from('analysis_usage').insert({
           user_id: user.id,
           asin: reviewCollection.asin,
           product_name: reviewCollection.productName,

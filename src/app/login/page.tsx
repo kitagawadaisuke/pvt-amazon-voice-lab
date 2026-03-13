@@ -34,8 +34,8 @@ export default function LoginPage() {
         <h1 className="mb-2 text-center text-2xl font-bold text-zinc-900 dark:text-zinc-50">
           Amazon Voice Lab
         </h1>
-        <p className="mb-8 text-center text-sm text-zinc-500 dark:text-zinc-400">
-          レビュー分析でインサイトを発見
+        <p className="mb-8 text-center text-sm text-zinc-500 text-balance dark:text-zinc-400">
+          レビューの声から、売れる商品戦略を
         </p>
 
         {error && (
@@ -70,7 +70,7 @@ export default function LoginPage() {
           {loading ? 'リダイレクト中...' : 'Googleでログイン'}
         </button>
 
-        <p className="mt-6 text-center text-xs text-zinc-400 dark:text-zinc-500">
+        <p className="mt-6 text-center text-xs text-zinc-400 text-balance dark:text-zinc-500">
           ログインすることで利用規約に同意したものとみなされます
         </p>
       </div>

@@ -3,7 +3,7 @@
   "name": "Amazon Voice Lab - Amazonレビュー分析",
   "version": "0.1.0",
   "description": "Amazonレビューを収集し、商品企画と訴求設計に活かすChrome拡張",
-  "permissions": ["activeTab", "storage"],
+  "permissions": ["activeTab", "storage", "identity"],
   "action": {
     "default_popup": "popup.html",
     "default_icon": {

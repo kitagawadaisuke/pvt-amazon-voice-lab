@@ -592,32 +592,99 @@
     });
 
     try {
+      let { accessToken, refreshToken } = await new Promise((resolve) =>
+        chrome.storage.local.get(['accessToken', 'refreshToken'], resolve)
+      );
+      // アクセストークンが切れていた場合はリフレッシュ
+      if (!accessToken && refreshToken) {
+        try {
+          const refreshRes = await fetch(
+            'https://ajujveerddffossdrwmr.supabase.co/auth/v1/token?grant_type=refresh_token',
+            {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                apikey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFqdWp2ZWVyZGRmZm9zc2Ryd21yIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMzNjYwMjUsImV4cCI6MjA4ODk0MjAyNX0.CVJEqxgFpoW8D87zq8dYpWUYISvAKAKZUphFJ2YUy3Q',
+              },
+              body: JSON.stringify({ refresh_token: refreshToken }),
+            }
+          );
+          const refreshData = await refreshRes.json();
+          if (refreshData.access_token) {
+            accessToken = refreshData.access_token;
+            chrome.storage.local.set({
+              accessToken: refreshData.access_token,
+              refreshToken: refreshData.refresh_token || refreshToken,
+            });
+          }
+        } catch {}
+      }
+      const reqHeaders = { 'Content-Type': 'application/json' };
+      if (accessToken) reqHeaders['Authorization'] = `Bearer ${accessToken}`;
       const response = await fetch(`${serverUrl}/api/analyze`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: reqHeaders,
+        credentials: 'include',
         body: JSON.stringify(payload),
       });
-      if (!response.ok) throw new Error(`Server error: ${response.status}`);
-
-      await response.json();
-      const completedState = {
-        ...analyzingState,
-        analyzing: false,
-        analyzedAt: new Date().toISOString(),
-      };
-      await saveCollectionState(completedState);
-      chrome.runtime.sendMessage({
-        type: 'ANALYSIS_COMPLETE',
-        total: state.reviews.length,
-        productInfo: state.productInfo,
-      }).catch(() => {});
-      window.open(`${serverUrl}/dashboard?asin=${state.productInfo?.asin}`, '_blank', 'noopener,noreferrer');
-      renderOverlay(completedState, {
-        stateKey: 'completed',
-        statusText: '分析完了',
-        subtext: 'ダッシュボードを新しいタブで開きました',
-        activityText: '分析が完了しました',
-      });
+      // 401のときはリフレッシュして1回だけ再試行
+      if (response.status === 401 && refreshToken) {
+        try {
+          const refreshRes = await fetch(
+            'https://ajujveerddffossdrwmr.supabase.co/auth/v1/token?grant_type=refresh_token',
+            {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                apikey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFqdWp2ZWVyZGRmZm9zc2Ryd21yIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMzNjYwMjUsImV4cCI6MjA4ODk0MjAyNX0.CVJEqxgFpoW8D87zq8dYpWUYISvAKAKZUphFJ2YUy3Q',
+              },
+              body: JSON.stringify({ refresh_token: refreshToken }),
+            }
+          );
+          const refreshData = await refreshRes.json();
+          if (refreshData.access_token) {
+            chrome.storage.local.set({
+              accessToken: refreshData.access_token,
+              refreshToken: refreshData.refresh_token || refreshToken,
+            });
+            const retryHeaders = { 'Content-Type': 'application/json', Authorization: `Bearer ${refreshData.access_token}` };
+            const retryRes = await fetch(`${serverUrl}/api/analyze`, {
+              method: 'POST',
+              headers: retryHeaders,
+              credentials: 'include',
+              body: JSON.stringify(payload),
+            });
+            if (!retryRes.ok) throw new Error(`Server error: ${retryRes.status}`);
+            await retryRes.json();
+          } else {
+            throw new Error('再ログインが必要です。拡張のポップアップからGoogleでログインしてください');
+          }
+        } catch (retryErr) {
+          throw retryErr;
+        }
+      } else if (!response.ok) {
+        throw new Error(`Server error: ${response.status}`);
+      } else {
+        await response.json();
+        const completedState = {
+          ...analyzingState,
+          analyzing: false,
+          analyzedAt: new Date().toISOString(),
+        };
+        await saveCollectionState(completedState);
+        chrome.runtime.sendMessage({
+          type: 'ANALYSIS_COMPLETE',
+          total: state.reviews.length,
+          productInfo: state.productInfo,
+        }).catch(() => {});
+        window.open(`${serverUrl}/dashboard?asin=${state.productInfo?.asin}`, '_blank', 'noopener,noreferrer');
+        renderOverlay(completedState, {
+          stateKey: 'completed',
+          statusText: '分析完了',
+          subtext: 'ダッシュボードを新しいタブで開きました',
+          activityText: '分析が完了しました',
+        });
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'unknown error';
       const failedState = {
@@ -1050,7 +1117,7 @@
       addedCount,
       maxPages: state.displayTotalPages || maxPages,
       statusText: `${getFilterLabel(state.phase)} - ページ${state.currentPage}/${state.displayTotalPages || maxPages} を取得中`,
-      subtext: `Amazonのレビュー一覧で、確認できるのは最大${state.displayTotalPages || maxPages}ページまでです`,
+      subtext: '',
     });
 
     console.log(
@@ -1081,7 +1148,7 @@
         stateKey: 'collecting',
         maxPages: state.displayTotalPages || 1,
         statusText: `${getFilterLabel(nextFilter)} のレビュー取得へ移行します`,
-        subtext: `Amazonのレビュー一覧で、確認できるのは最大${state.displayTotalPages || 1}ページまでです`,
+        subtext: '',
       });
       await new Promise((resolve) => setTimeout(resolve, waitTime));
       window.location.href = filterUrl;

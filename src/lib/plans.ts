@@ -12,7 +12,7 @@ export interface PlanConfig {
 export const PLANS: Record<Plan, PlanConfig> = {
   free: {
     name: 'Free',
-    monthlyLimit: 3,
+    monthlyLimit: 5,
     byokAllowed: false,
     compareLimit: 2,
     depths: ['standard'],

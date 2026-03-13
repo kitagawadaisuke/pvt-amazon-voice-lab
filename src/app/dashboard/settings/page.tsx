@@ -4,6 +4,12 @@ import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 
+async function getAccessToken(): Promise<string | null> {
+  const supabase = createClient()
+  const { data } = await supabase.auth.getSession()
+  return data.session?.access_token ?? null
+}
+
 interface UserData {
   user: { id: string; email: string; plan: 'free' | 'standard'; hasStripe: boolean }
   usage: { current: number; limit: number }
@@ -15,6 +21,8 @@ export default function SettingsPage() {
   const [userData, setUserData] = useState<UserData | null>(null)
   const [portalLoading, setPortalLoading] = useState(false)
   const [loggingOut, setLoggingOut] = useState(false)
+  const [token, setToken] = useState<string | null>(null)
+  const [tokenCopied, setTokenCopied] = useState(false)
 
   useEffect(() => {
     fetch('/api/user').then(r => r.ok ? r.json() : null).then(setUserData)
@@ -29,6 +37,18 @@ export default function SettingsPage() {
     } catch {
       setPortalLoading(false)
     }
+  }
+
+  const handleShowToken = async () => {
+    const t = await getAccessToken()
+    setToken(t)
+  }
+
+  const handleCopyToken = () => {
+    if (!token) return
+    navigator.clipboard.writeText(token)
+    setTokenCopied(true)
+    setTimeout(() => setTokenCopied(false), 2000)
   }
 
   const handleLogout = async () => {
@@ -136,6 +156,32 @@ export default function SettingsPage() {
                 className="rounded-lg bg-purple-600 px-4 py-2 text-sm font-medium text-white hover:bg-purple-700 transition-colors"
               >
                 プラン・料金を見る
+              </button>
+            </div>
+          )}
+        </section>
+
+        {/* Chrome拡張用トークン */}
+        <section className="mb-6 rounded-xl border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-900">
+          <h2 className="mb-1 text-lg font-semibold text-zinc-900 dark:text-zinc-50">Chrome拡張連携</h2>
+          <p className="mb-4 text-sm text-zinc-500">拡張のpopupにこのトークンを貼り付けてください。有効期限は約1時間です。</p>
+          {!token ? (
+            <button
+              onClick={handleShowToken}
+              className="rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50 transition-colors"
+            >
+              トークンを表示
+            </button>
+          ) : (
+            <div className="space-y-2">
+              <div className="rounded-lg bg-zinc-100 p-3 font-mono text-xs break-all text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 select-all">
+                {token}
+              </div>
+              <button
+                onClick={handleCopyToken}
+                className="rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50 transition-colors"
+              >
+                {tokenCopied ? 'コピーしました！' : 'クリップボードにコピー'}
               </button>
             </div>
           )}

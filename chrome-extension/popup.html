@@ -202,6 +202,18 @@
   <div class="settings">
     <label>Amazon Voice Lab サーバーURL</label>
     <input type="text" id="serverUrl" placeholder="http://localhost:3000" />
+
+    <div id="authSection" style="margin-top:12px;">
+      <div id="authLoggedOut" style="display:none;">
+        <button id="googleLoginBtn" class="btn-primary" style="font-size:13px; padding:8px;">Googleでログイン</button>
+      </div>
+      <div id="authLoggedIn" style="display:none; padding:8px; background:#1e293b; border-radius:6px; border:1px solid #334155;">
+        <div style="font-size:12px; color:#94a3b8; margin-bottom:4px;">ログイン中</div>
+        <div style="font-size:13px; color:#e2e8f0; margin-bottom:8px; word-break:break-all;" id="authEmail"></div>
+        <button id="logoutBtn" style="width:100%; padding:5px; border:1px solid #475569; border-radius:6px; background:transparent; color:#94a3b8; font-size:12px; cursor:pointer;">ログアウト</button>
+      </div>
+      <div id="authLoading" style="font-size:12px; color:#94a3b8;">認証状態を確認中...</div>
+    </div>
   </div>
 
   <script src="popup.js"></script>
