@@ -4,7 +4,7 @@
 create table public.profiles (
   id uuid primary key references auth.users on delete cascade,
   email text,
-  plan text default 'free' check (plan in ('free', 'starter', 'basic', 'pro')),
+  plan text default 'free' check (plan in ('free', 'standard')),
   stripe_customer_id text,
   created_at timestamptz default now()
 );
@@ -90,3 +90,17 @@ create table public.reports (
 alter table public.reports enable row level security;
 create policy "Users can view own reports" on public.reports for select using (auth.uid() = user_id);
 create index idx_reports_user_id on public.reports(user_id);
+
+-- Analysis Usage (使用量トラッキング)
+create table public.analysis_usage (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid references public.profiles(id) on delete cascade not null,
+  asin text not null,
+  product_name text,
+  created_at timestamptz default now()
+);
+
+alter table public.analysis_usage enable row level security;
+create policy "Users can view own usage" on public.analysis_usage for select using (auth.uid() = user_id);
+create policy "Users can insert own usage" on public.analysis_usage for insert with check (auth.uid() = user_id);
+create index idx_usage_user_month on public.analysis_usage(user_id, created_at);

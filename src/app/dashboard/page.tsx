@@ -229,6 +229,14 @@ function getCategoryEvidenceReviews(
   const mentionPhrases = extractSearchPhrases(mentions.join('、'))
   // カテゴリ名・説明文は補助キーワード（重み低め）
   const auxPhrases = extractSearchPhrases(`${category} ${fallbackDescription || ''}`)
+  // 全検索キーワードを結合（部分一致用に2文字以上の語を抽出）
+  const allKeywords = [...mentionPhrases, ...auxPhrases]
+    .flatMap((p) => {
+      const parts = p.match(/[一-龠ぁ-んァ-ヶー]{2,}|[A-Za-z0-9]{2,}/g) || []
+      return [p, ...parts]
+    })
+    .map((k) => k.toLowerCase())
+    .filter((k, i, arr) => k.length >= 2 && arr.indexOf(k) === i)
 
   const scored = reviews
     .map((review) => {
@@ -244,27 +252,45 @@ function getCategoryEvidenceReviews(
         const n = phrase.toLowerCase()
         return text.includes(n) ? sum + 1 : sum
       }, 0)
-
-      return { review, score, key }
+      // 部分語マッチ（重み最低 = 0.5）: 上記で0点でもキーワードの部分語が含まれていればスコア加算
+      if (score === 0) {
+        score += allKeywords.reduce((sum, kw) => {
+          return text.includes(kw) ? sum + 0.5 : sum
+        }, 0)
+      }
+      const used = excludeKeys?.has(key) ?? false
+      return { review, score, key, used }
     })
     .filter((item) => item.score > 0)
-    .filter((item) => !excludeKeys || !excludeKeys.has(item.key))
-    .sort((a, b) => b.score - a.score)
 
-  if (scored.length > 0) {
-    return scored.slice(0, 10).map((item) => item.review)
+  // 未使用マッチが十分あれば未使用優先、少なければ重複も許容
+  const unused = scored.filter((item) => !item.used)
+  const sorted = unused.length >= 3
+    ? [...unused.sort((a, b) => b.score - a.score), ...scored.filter((item) => item.used).sort((a, b) => b.score - a.score)]
+    : scored.sort((a, b) => b.score - a.score)
+
+  const matched = sorted.slice(0, 10).map((item) => item.review)
+
+  // マッチが少ない場合、未使用レビューで補完して最低5件は返す
+  const MIN_EVIDENCE = 5
+  if (matched.length < MIN_EVIDENCE) {
+    const matchedKeys = new Set(sorted.slice(0, 10).map((item) => item.key))
+    const allUsedKeys = new Set([...matchedKeys, ...(excludeKeys || [])])
+    const supplement = reviews
+      .filter((r) => {
+        const key = `${r.date}|${r.title}|${r.body?.slice(0, 50)}`
+        return !allUsedKeys.has(key)
+      })
+    // 星評価を分散させて補完
+    const highRated = supplement.filter((r) => r.rating >= 4)
+    const lowRated = supplement.filter((r) => r.rating <= 2)
+    const midRated = supplement.filter((r) => r.rating === 3)
+    const padPool = [...highRated, ...midRated, ...lowRated]
+    const pad = (padPool.length > 0 ? padPool : supplement).slice(0, MIN_EVIDENCE - matched.length)
+    return [...matched, ...pad]
   }
 
-  // フォールバック: キーワードマッチ0件の場合、星評価を分散させて代表レビューを返す
-  const available = excludeKeys
-    ? reviews.filter((r) => !excludeKeys.has(`${r.date}|${r.title}|${r.body?.slice(0, 50)}`))
-    : reviews
-  if (available.length === 0) return reviews.slice(0, 3)
-  const highRated = available.filter((r) => r.rating >= 4).slice(0, 2)
-  const lowRated = available.filter((r) => r.rating <= 2).slice(0, 1)
-  const midRated = available.filter((r) => r.rating === 3).slice(0, 1)
-  const fallback = [...highRated, ...midRated, ...lowRated]
-  return fallback.length > 0 ? fallback.slice(0, 3) : available.slice(0, 3)
+  return matched
 }
 
 
@@ -395,13 +421,48 @@ export default function Dashboard() {
   const [selectedReviewStar, setSelectedReviewStar] = useState<'all' | 5 | 4 | 3 | 2 | 1>('all')
   const [visibleReviewCount, setVisibleReviewCount] = useState(5)
   const [userApiKey, setUserApiKey] = useState('')
+  const [apiKeyStatus, setApiKeyStatus] = useState<'idle' | 'checking' | 'valid' | 'invalid'>('idle')
   const [showSettings, setShowSettings] = useState(false)
+  const [userInfo, setUserInfo] = useState<{
+    user: { id: string; email: string; plan: 'free' | 'standard'; hasStripe: boolean }
+    usage: { current: number; limit: number }
+    planConfig: { compareLimit: number; byokAllowed: boolean; depths: string[] }
+  } | null>(null)
+
+  // ユーザー情報・使用量取得
+  useEffect(() => {
+    fetch('/api/user').then(r => r.ok ? r.json() : null).then(d => {
+      if (d) setUserInfo(d)
+    })
+  }, [])
 
   // localStorageからAPIキーを復元
   useEffect(() => {
     const saved = localStorage.getItem('reviewai_api_key')
-    if (saved) setUserApiKey(saved)
+    if (saved) {
+      setUserApiKey(saved)
+      validateApiKey(saved)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  const validateApiKey = async (key: string) => {
+    if (!key || !key.startsWith('sk-ant-')) {
+      setApiKeyStatus('invalid')
+      return
+    }
+    setApiKeyStatus('checking')
+    try {
+      const res = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' },
+        body: JSON.stringify({ model: 'claude-haiku-4-5-20251001', max_tokens: 1, messages: [{ role: 'user', content: 'hi' }] }),
+      })
+      setApiKeyStatus(res.ok ? 'valid' : 'invalid')
+    } catch {
+      setApiKeyStatus('invalid')
+    }
+  }
 
   useEffect(() => {
     fetch('/api/products').then(r => r.json()).then(d => setProducts(d.products))
@@ -818,9 +879,27 @@ export default function Dashboard() {
             <p className="text-sm text-gray-500">Amazonレビューを、商品企画と訴求設計に活かす</p>
           </div>
           <div className="flex items-center gap-3">
-            <span className="px-3 py-1 bg-blue-100 text-blue-800 text-xs font-medium rounded-full">
-              {userApiKey ? 'BYOK' : 'Free Plan'}
-            </span>
+            {userInfo && (
+              <div className="flex items-center gap-2">
+                <span className={`px-3 py-1 text-xs font-medium rounded-full ${userInfo.user.plan === 'standard' ? 'bg-purple-100 text-purple-800' : 'bg-gray-100 text-gray-600'}`}>
+                  {userInfo.user.plan === 'standard' ? 'Standard' : 'Free'}
+                </span>
+                <div className="flex items-center gap-1.5" title={`今月 ${userInfo.usage.current}/${userInfo.usage.limit} 回使用`}>
+                  <div className="w-16 h-1.5 bg-gray-200 rounded-full overflow-hidden">
+                    <div
+                      className={`h-full rounded-full transition-all ${userInfo.usage.current >= userInfo.usage.limit ? 'bg-red-500' : userInfo.usage.current >= userInfo.usage.limit * 0.8 ? 'bg-amber-500' : 'bg-blue-500'}`}
+                      style={{ width: `${Math.min(100, (userInfo.usage.current / userInfo.usage.limit) * 100)}%` }}
+                    />
+                  </div>
+                  <span className="text-xs text-gray-500">{userInfo.usage.current}/{userInfo.usage.limit}</span>
+                </div>
+              </div>
+            )}
+            {!userInfo && (
+              <span className="px-3 py-1 bg-gray-100 text-gray-500 text-xs font-medium rounded-full">
+                読込中...
+              </span>
+            )}
             <button
               onClick={() => setShowSettings(!showSettings)}
               className="p-2 text-gray-400 hover:text-gray-600 transition-colors"
@@ -844,18 +923,33 @@ export default function Dashboard() {
                   type="password"
                   value={userApiKey}
                   onChange={e => {
-                    setUserApiKey(e.target.value)
-                    if (e.target.value) {
-                      localStorage.setItem('reviewai_api_key', e.target.value)
+                    const val = e.target.value
+                    setUserApiKey(val)
+                    if (val) {
+                      localStorage.setItem('reviewai_api_key', val)
+                      setApiKeyStatus('idle')
                     } else {
                       localStorage.removeItem('reviewai_api_key')
+                      setApiKeyStatus('idle')
                     }
                   }}
+                  onBlur={() => { if (userApiKey) validateApiKey(userApiKey) }}
                   placeholder="sk-ant-... (入力するとBYOKモード: 自分のキーで無制限分析)"
-                  className="flex-1 px-3 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className={`flex-1 px-3 py-1.5 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                    apiKeyStatus === 'invalid' ? 'border-red-300 bg-red-50' :
+                    apiKeyStatus === 'valid' ? 'border-green-300' : 'border-gray-300'
+                  }`}
                 />
                 {userApiKey && (
-                  <span className="text-xs text-green-600 font-medium whitespace-nowrap">BYOK有効</span>
+                  <span className={`text-xs font-medium whitespace-nowrap ${
+                    apiKeyStatus === 'checking' ? 'text-gray-400' :
+                    apiKeyStatus === 'valid' ? 'text-green-600' :
+                    apiKeyStatus === 'invalid' ? 'text-red-500' : 'text-gray-400'
+                  }`}>
+                    {apiKeyStatus === 'checking' ? '確認中...' :
+                     apiKeyStatus === 'valid' ? '有効' :
+                     apiKeyStatus === 'invalid' ? '無効なキーです' : '未確認'}
+                  </span>
                 )}
               </div>
               <p className="text-xs text-gray-400 mt-1.5">
@@ -1728,10 +1822,10 @@ export default function Dashboard() {
               </button>
               <button
                 onClick={() => router.push(`/dashboard/compare?asins=${Array.from(selectedAsins).join(',')}`)}
-                disabled={selectedAsins.size < 2 || selectedAsins.size > 5}
+                disabled={selectedAsins.size < 2 || selectedAsins.size > (userInfo?.planConfig.compareLimit ?? 5)}
                 className="rounded-lg bg-blue-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-blue-700 transition-colors disabled:opacity-40"
               >
-                {selectedAsins.size > 5 ? '比較は最大5商品' : '比較する'}
+                {selectedAsins.size > (userInfo?.planConfig.compareLimit ?? 5) ? `比較は最大${userInfo?.planConfig.compareLimit ?? 5}商品` : '比較する'}
               </button>
             </div>
           </div>

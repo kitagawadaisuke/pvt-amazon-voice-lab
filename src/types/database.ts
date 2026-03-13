@@ -1,4 +1,4 @@
-export type Plan = 'free' | 'starter' | 'basic' | 'pro'
+export type Plan = 'free' | 'standard'
 export type Importance = 'high' | 'medium' | 'low'
 export type CheckInterval = 'daily' | 'weekly'
 
@@ -57,5 +57,13 @@ export interface Report {
   report_data: ReportData
   sent_at: string | null
   email_opened: boolean
+  created_at: string
+}
+
+export interface AnalysisUsage {
+  id: string
+  user_id: string
+  asin: string
+  product_name: string | null
   created_at: string
 }

@@ -71,6 +71,9 @@ export interface ReviewAnalysisReport {
     goodValue: number // %
   }
   actionRecommendations: ActionRecommendation[]
+
+  // モック分析かAI分析か
+  isMock?: boolean
 }
 
 interface AnalyzeReviewOptions {
@@ -172,10 +175,10 @@ function buildCategoryFramework(
   }
 
   return [
-    { name: '仕様・前提条件', description: '購入前に確認する必要がある仕様、条件、前提情報' },
-    { name: '使いやすさ', description: '使い方のわかりやすさ、扱いやすさ、操作性' },
-    { name: '主要価値', description: 'この商品で得たい主要な価値、期待した効果や役立ち方' },
-    { name: '価格・コスパ', description: '価格の納得感、費用対効果、継続しやすさ' },
+    { name: '商品スペック', description: 'サイズ・素材・対応機種など購入前に確認する仕様情報' },
+    { name: '使いやすさ', description: '操作性、扱いやすさ、セットアップの手間' },
+    { name: '機能・効果', description: '期待した機能が果たされたか、実際の効果や満足度' },
+    { name: '価格・コスパ', description: '価格の納得感、費用対効果' },
   ]
 }
 
@@ -337,6 +340,7 @@ function parseAIResponse(text: string, collection: ReviewCollection, options: An
         poxGuidance: options.poxGuidance?.trim() || '',
         analysisDepth: options.analysisDepth || 'standard',
         totalReviewsAnalyzed: collection.reviews.length,
+        isMock: false,
         ...parsed,
         categoryBreakdown: sanitizedBreakdown,
         poxAnalysis: sanitizedPox,
@@ -385,6 +389,7 @@ function generateMockAnalysis(collection: ReviewCollection, options: AnalyzeRevi
     poxGuidance: options.poxGuidance?.trim() || '',
     analysisDepth: options.analysisDepth || 'standard',
     totalReviewsAnalyzed: collection.reviews.length,
+    isMock: true,
 
     categoryBreakdown,
 
@@ -399,8 +404,8 @@ function generateMockAnalysis(collection: ReviewCollection, options: AnalyzeRevi
       return {
         pod: [
           {
-            title: `${categories[2]?.name || '主要価値'}の満足度`,
-            description: `高評価レビューでは「${categories[2]?.name || '主要価値'}」に関する肯定的な言及が目立ちます。ここを差別化軸として前面に出す余地があります。`,
+            title: `${categories[2]?.name || '機能・効果'}の満足度`,
+            description: `高評価レビューでは「${categories[2]?.name || '機能・効果'}」に関する肯定的な言及が目立ちます。ここを差別化軸として前面に出す余地があります。`,
             evidence: pickEvidence(positiveEvidence, 3, '高評価レビューで繰り返し言及されています'),
             confidence: 'high',
             reviewCount: Math.round(reviewCount * 0.35),
@@ -415,8 +420,8 @@ function generateMockAnalysis(collection: ReviewCollection, options: AnalyzeRevi
         ],
         pop: [
           {
-            title: `${categories[0]?.name || '仕様・前提条件'}の明確さ`,
-            description: `購入前に確認すべき仕様や前提条件は、このカテゴリで最低限満たすべき情報です。商品ページでも誤解なく伝える必要があります。`,
+            title: `${categories[0]?.name || '商品スペック'}の明確さ`,
+            description: `購入前に確認すべきスペックや仕様は、このカテゴリで最低限満たすべき情報です。商品ページでも誤解なく伝える必要があります。`,
             evidence: pickEvidence(allEvidence, 3, 'レビューで前提条件への言及があります'),
             confidence: 'high',
             reviewCount: Math.round(reviewCount * 0.45),
