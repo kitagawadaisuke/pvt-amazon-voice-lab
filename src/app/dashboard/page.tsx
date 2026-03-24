@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, Suspense } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
 import type { CategoryDefinition } from '@/lib/services/pox-analyzer'
 
@@ -396,7 +396,7 @@ function PoxItemCard({ item, borderColor, reviews }: {
   )
 }
 
-export default function Dashboard() {
+function DashboardContent() {
   const searchParams = useSearchParams()
   const [products, setProducts] = useState<Product[]>([])
   const [loadingReportId, setLoadingReportId] = useState<string | null>(null)
@@ -1871,5 +1871,17 @@ export default function Dashboard() {
         </div>
       )}
     </div>
+  )
+}
+
+export default function Dashboard() {
+  return (
+    <Suspense fallback={
+      <div className="flex min-h-screen items-center justify-center bg-gray-50">
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-blue-600 border-t-transparent" />
+      </div>
+    }>
+      <DashboardContent />
+    </Suspense>
   )
 }
