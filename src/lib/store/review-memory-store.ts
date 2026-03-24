@@ -1,5 +1,4 @@
-import fs from 'node:fs'
-import path from 'node:path'
+import type { SupabaseClient } from '@supabase/supabase-js'
 import type { ReviewAnalysisReport } from '@/lib/services/pox-analyzer'
 import type { ReviewCollection } from '@/lib/services/review-scraper'
 
@@ -14,156 +13,229 @@ export interface StoredProduct {
   created_at: string
 }
 
-interface StoreShape {
-  products: Record<string, StoredProduct>
-  reports: Record<string, ReviewAnalysisReport>
-  collections: Record<string, ReviewCollection>
-}
-
-const STORE_DIR = path.join(process.cwd(), '.data')
-const STORE_PATH = path.join(STORE_DIR, 'review-store.json')
-
-function createDefaultStore(): StoreShape {
+// DB行 → StoredProduct (snake_case → camelCase)
+function toStoredProduct(row: Record<string, unknown>): StoredProduct {
   return {
-    products: {
-      B0DEMOASIN: {
-        id: '1',
-        asin: 'B0DEMOASIN',
-        name: 'シュワッシュ 炭酸シャンプー 200ml',
-        lastAnalyzedAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(),
-        averageRating: 3.6,
-        totalReviews: 15,
-        created_at: new Date().toISOString(),
-      },
-    },
-    reports: {},
-    collections: {},
+    id: row.id as string,
+    asin: row.asin as string,
+    name: row.name as string,
+    lastAnalyzedAt: (row.last_analyzed_at as string) ?? null,
+    averageRating: row.average_rating != null ? Number(row.average_rating) : null,
+    totalReviews: (row.total_reviews as number) ?? null,
+    price: row.price != null ? Number(row.price) : null,
+    created_at: row.created_at as string,
   }
 }
 
-function ensureStoreFile() {
-  if (!fs.existsSync(STORE_DIR)) {
-    fs.mkdirSync(STORE_DIR, { recursive: true })
-  }
+export async function listProducts(supabase: SupabaseClient): Promise<StoredProduct[]> {
+  const { data, error } = await supabase
+    .from('products')
+    .select('*')
+    .order('created_at', { ascending: true })
 
-  if (!fs.existsSync(STORE_PATH)) {
-    fs.writeFileSync(STORE_PATH, JSON.stringify(createDefaultStore(), null, 2), 'utf8')
-  }
+  if (error) throw error
+  return (data || []).map(toStoredProduct)
 }
 
-function readStore(): StoreShape {
-  ensureStoreFile()
+export async function getProductByAsin(supabase: SupabaseClient, asin: string): Promise<StoredProduct | null> {
+  const { data, error } = await supabase
+    .from('products')
+    .select('*')
+    .eq('asin', asin)
+    .maybeSingle()
 
-  try {
-    const raw = fs.readFileSync(STORE_PATH, 'utf8')
-    const parsed = JSON.parse(raw) as Partial<StoreShape>
-    return {
-      products: parsed.products || createDefaultStore().products,
-      reports: parsed.reports || {},
-      collections: parsed.collections || {},
-    }
-  } catch {
-    const fallback = createDefaultStore()
-    fs.writeFileSync(STORE_PATH, JSON.stringify(fallback, null, 2), 'utf8')
-    return fallback
-  }
+  if (error) throw error
+  return data ? toStoredProduct(data) : null
 }
 
-function writeStore(store: StoreShape) {
-  ensureStoreFile()
-  fs.writeFileSync(STORE_PATH, JSON.stringify(store, null, 2), 'utf8')
-}
-
-export function listProducts(): StoredProduct[] {
-  const store = readStore()
-  return Object.values(store.products).sort((a, b) => a.created_at.localeCompare(b.created_at))
-}
-
-export function getProductByAsin(asin: string): StoredProduct | undefined {
-  const store = readStore()
-  return store.products[asin]
-}
-
-export function addProduct(input: { asin: string; name?: string }): StoredProduct {
-  const store = readStore()
-  const existing = store.products[input.asin]
+export async function addProduct(
+  supabase: SupabaseClient,
+  userId: string,
+  input: { asin: string; name?: string }
+): Promise<StoredProduct> {
+  const existing = await getProductByAsin(supabase, input.asin)
   if (existing) return existing
 
-  const product: StoredProduct = {
-    id: crypto.randomUUID(),
-    asin: input.asin,
-    name: input.name || `Amazon商品 ${input.asin}`,
-    lastAnalyzedAt: null,
-    averageRating: null,
-    totalReviews: null,
-    created_at: new Date().toISOString(),
-  }
+  const { data, error } = await supabase
+    .from('products')
+    .insert({
+      user_id: userId,
+      asin: input.asin,
+      name: input.name || `Amazon商品 ${input.asin}`,
+    })
+    .select()
+    .single()
 
-  store.products[product.asin] = product
-  writeStore(store)
-  return product
+  if (error) throw error
+  return toStoredProduct(data)
 }
 
-export function deleteProductById(id: string): boolean {
-  const store = readStore()
-  const entry = Object.values(store.products).find((product) => product.id === id)
-  if (!entry) return false
+export async function deleteProductById(supabase: SupabaseClient, id: string): Promise<boolean> {
+  // まずASINを取得（関連データ削除用）
+  const { data: product } = await supabase
+    .from('products')
+    .select('asin')
+    .eq('id', id)
+    .maybeSingle()
 
-  delete store.products[entry.asin]
-  delete store.reports[entry.asin]
-  writeStore(store)
+  if (!product) return false
+
+  // 関連データを先に削除
+  await supabase.from('review_reports').delete().eq('asin', product.asin)
+  await supabase.from('review_collections').delete().eq('asin', product.asin)
+
+  const { error } = await supabase.from('products').delete().eq('id', id)
+  if (error) throw error
   return true
 }
 
-export function saveAnalysisResult(input: {
-  asin: string
-  productName: string
-  averageRating: number
-  totalReviews: number
-  report: ReviewAnalysisReport
-  collection: ReviewCollection
-}): StoredProduct {
-  const store = readStore()
-  const existing = store.products[input.asin]
-  const product: StoredProduct = {
-    id: existing?.id || crypto.randomUUID(),
-    asin: input.asin,
-    name: input.productName || existing?.name || `Amazon商品 ${input.asin}`,
-    lastAnalyzedAt: input.report.analyzedAt,
-    averageRating: input.averageRating,
-    totalReviews: input.totalReviews,
-    price: input.collection.price ?? existing?.price ?? null,
-    created_at: existing?.created_at || new Date().toISOString(),
+export async function saveAnalysisResult(
+  supabase: SupabaseClient,
+  userId: string,
+  input: {
+    asin: string
+    productName: string
+    averageRating: number
+    totalReviews: number
+    report: ReviewAnalysisReport
+    collection: ReviewCollection
   }
+): Promise<StoredProduct> {
+  // Product UPSERT
+  const { data: product, error: productError } = await supabase
+    .from('products')
+    .upsert({
+      user_id: userId,
+      asin: input.asin,
+      name: input.productName,
+      last_analyzed_at: input.report.analyzedAt,
+      average_rating: input.averageRating,
+      total_reviews: input.totalReviews,
+      price: input.collection.price ?? null,
+    }, { onConflict: 'user_id,asin' })
+    .select()
+    .single()
 
-  store.products[input.asin] = product
-  store.reports[input.asin] = input.report
-  store.collections[input.asin] = input.collection
-  writeStore(store)
-  return product
+  if (productError) throw productError
+
+  // Report UPSERT
+  const { error: reportError } = await supabase
+    .from('review_reports')
+    .upsert({
+      user_id: userId,
+      asin: input.asin,
+      report_data: input.report as unknown as Record<string, unknown>,
+      updated_at: new Date().toISOString(),
+    }, { onConflict: 'user_id,asin' })
+
+  if (reportError) throw reportError
+
+  // Collection UPSERT
+  const { error: collectionError } = await supabase
+    .from('review_collections')
+    .upsert({
+      user_id: userId,
+      asin: input.asin,
+      collection_data: input.collection as unknown as Record<string, unknown>,
+      updated_at: new Date().toISOString(),
+    }, { onConflict: 'user_id,asin' })
+
+  if (collectionError) throw collectionError
+
+  return toStoredProduct(product)
 }
 
-export function getReportByAsin(asin: string): ReviewAnalysisReport | undefined {
-  const store = readStore()
-  return store.reports[asin]
+export async function getReportByAsin(supabase: SupabaseClient, asin: string): Promise<ReviewAnalysisReport | null> {
+  const { data, error } = await supabase
+    .from('review_reports')
+    .select('report_data')
+    .eq('asin', asin)
+    .maybeSingle()
+
+  if (error) throw error
+  return (data?.report_data as unknown as ReviewAnalysisReport) ?? null
 }
 
-export function getCollectionByAsin(asin: string): ReviewCollection | undefined {
-  const store = readStore()
-  return store.collections[asin]
+export async function getCollectionByAsin(supabase: SupabaseClient, asin: string): Promise<ReviewCollection | null> {
+  const { data, error } = await supabase
+    .from('review_collections')
+    .select('collection_data')
+    .eq('asin', asin)
+    .maybeSingle()
+
+  if (error) throw error
+  return (data?.collection_data as unknown as ReviewCollection) ?? null
 }
 
-export function updateReportNotes(asin: string, notes: string): ReviewAnalysisReport | undefined {
-  const store = readStore()
-  const report = store.reports[asin]
-  if (!report) return undefined
+export async function updateReportNotes(
+  supabase: SupabaseClient,
+  asin: string,
+  notes: string
+): Promise<ReviewAnalysisReport | null> {
+  const { data, error } = await supabase
+    .from('review_reports')
+    .select('report_data')
+    .eq('asin', asin)
+    .maybeSingle()
+
+  if (error) throw error
+  if (!data) return null
+
+  const report = data.report_data as unknown as ReviewAnalysisReport
+  const updatedReport: ReviewAnalysisReport = { ...report, notes }
+
+  const { error: updateError } = await supabase
+    .from('review_reports')
+    .update({
+      report_data: updatedReport as unknown as Record<string, unknown>,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('asin', asin)
+
+  if (updateError) throw updateError
+  return updatedReport
+}
+
+export async function updateReportCategoryNames(
+  supabase: SupabaseClient,
+  asin: string,
+  categoryNames: { index: number; name: string }[]
+): Promise<ReviewAnalysisReport | null> {
+  const { data, error } = await supabase
+    .from('review_reports')
+    .select('report_data')
+    .eq('asin', asin)
+    .maybeSingle()
+
+  if (error) throw error
+  if (!data) return null
+
+  const report = data.report_data as unknown as ReviewAnalysisReport
+
+  const updatedBreakdown = report.categoryBreakdown.map((item, i) => {
+    const update = categoryNames.find((c) => c.index === i)
+    return update ? { ...item, category: update.name } : item
+  })
+
+  const updatedFramework = (report.categoryFramework || []).map((item, i) => {
+    const update = categoryNames.find((c) => c.index === i)
+    return update ? { ...item, name: update.name } : item
+  })
 
   const updatedReport: ReviewAnalysisReport = {
     ...report,
-    notes,
+    categoryBreakdown: updatedBreakdown,
+    categoryFramework: updatedFramework,
   }
 
-  store.reports[asin] = updatedReport
-  writeStore(store)
+  const { error: updateError } = await supabase
+    .from('review_reports')
+    .update({
+      report_data: updatedReport as unknown as Record<string, unknown>,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('asin', asin)
+
+  if (updateError) throw updateError
   return updatedReport
 }

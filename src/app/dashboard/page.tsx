@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
 import type { CategoryDefinition } from '@/lib/services/pox-analyzer'
 
@@ -468,8 +468,17 @@ export default function Dashboard() {
     fetch('/api/products').then(r => r.json()).then(d => setProducts(d.products))
   }, [])
 
+  const prevReportAsinRef = useRef<string | null>(null)
   useEffect(() => {
     if (!report) return
+    // 同じASINのreport更新（カテゴリ名変更等）ではエディタをリセットしない
+    if (prevReportAsinRef.current === report.asin) {
+      setPoxGuidanceInput(report.poxGuidance || '')
+      setAnalysisDepth(report.analysisDepth || 'standard')
+      setNotesInput(report.notes || '')
+      return
+    }
+    prevReportAsinRef.current = report.asin
     setCategoryEditorValues(
       (report.categoryFramework?.length ? report.categoryFramework : report.categoryBreakdown.map((item) => ({
         name: item.category,
@@ -643,15 +652,55 @@ export default function Dashboard() {
     URL.revokeObjectURL(url)
   }
 
+  const categoryNameSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const saveCategoryNames = useCallback(async (asin: string, values: CategoryEditorValue[]) => {
+    try {
+      await fetch('/api/reports', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          asin,
+          categoryNames: values.map((v, i) => ({ index: i, name: v.name })),
+        }),
+      })
+    } catch {
+      // サイレントに失敗（次回の保存で上書き）
+    }
+  }, [])
+
   const updateCategoryName = (index: number, category: string) => {
-    if (!report) return
-    const nextBreakdown = report.categoryBreakdown.map((item, itemIndex) => (
-      itemIndex === index ? { ...item, category } : item
-    ))
-    setReport({ ...report, categoryBreakdown: nextBreakdown })
-    setCategoryEditorValues((current) => current.map((item, itemIndex) => (
-      itemIndex === index ? { ...item, name: category } : item
-    )))
+    setCategoryEditorValues((current) => {
+      const updated = current.map((item, itemIndex) =>
+        itemIndex === index ? { ...item, name: category } : item
+      )
+
+      // debounce付きでAPI保存
+      if (report) {
+        if (categoryNameSaveTimer.current) clearTimeout(categoryNameSaveTimer.current)
+        categoryNameSaveTimer.current = setTimeout(() => {
+          saveCategoryNames(report.asin, updated)
+        }, 800)
+      }
+
+      return updated
+    })
+
+    // reportのcategoryBreakdownも即座に更新（表示に反映）
+    if (report) {
+      setReport((prev) => {
+        if (!prev) return prev
+        return {
+          ...prev,
+          categoryBreakdown: prev.categoryBreakdown.map((item, i) =>
+            i === index ? { ...item, category } : item
+          ),
+          categoryFramework: (prev.categoryFramework || []).map((item, i) =>
+            i === index ? { ...item, name: category } : item
+          ),
+        }
+      })
+    }
   }
 
   const updateCategoryDescription = (index: number, description: string) => {
@@ -703,6 +752,7 @@ export default function Dashboard() {
       if (!res.ok) {
         throw new Error(data.error || '再分析に失敗しました')
       }
+      prevReportAsinRef.current = null // 再分析後はエディタもリセット
       setReport(normalizeReport(data.report))
       setEditingCategories(false)
       setEditingPoxGuidance(false)
@@ -766,8 +816,12 @@ export default function Dashboard() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-gray-50 text-[15px]">
       <style jsx global>{`
+        .text-xs { font-size: 13px !important; line-height: 1.5 !important; }
+        .text-sm { font-size: 14.5px !important; line-height: 1.6 !important; }
+        .text-\\[11px\\] { font-size: 12.5px !important; line-height: 1.5 !important; }
+        .text-\\[10px\\] { font-size: 12px !important; line-height: 1.5 !important; }
         @page {
           size: A4;
           margin: 12mm;
@@ -1330,7 +1384,7 @@ export default function Dashboard() {
                 </div>
                 <div className="mt-2 rounded-lg bg-gray-50 px-4 py-3 text-xs leading-5 text-gray-600">
                   <p>購入者がこの商品のどこに注目しているかを、4つの観点に分けて可視化しています。言及率が高い観点ほど、商品ページの訴求や改善で優先すべき領域です。</p>
-                  <p className="mt-1">分析観点は自由に変更できます。「この切り口でレビューを分類したらどうなるか？」という仮説検証にお使いください。</p>
+                  <p className="mt-1"><strong>観点名</strong>はそのまま編集・保存できます。<strong>AIへの指示</strong>を変更した場合は「分析観点を調整」→「この観点で再分析」を押すと、新しい指示でAIが分析し直します。</p>
                 </div>
               </div>
               <div className="mb-6 rounded-xl border border-gray-100 bg-gradient-to-br from-slate-50 to-white p-4">
@@ -1378,9 +1432,10 @@ export default function Dashboard() {
                     <div className="flex items-center justify-between mb-2">
                       {editingCategories ? (
                         <div className="flex-1 pr-3">
+                          <label className="mb-1 block text-[11px] font-semibold text-gray-400">観点名（変更可）</label>
                           <input
                             type="text"
-                            value={categoryEditorValues[i]?.name || cat.category}
+                            value={categoryEditorValues[i]?.name ?? cat.category}
                             onChange={(e) => updateCategoryName(i, e.target.value)}
                             className="w-full max-w-full rounded border border-gray-300 px-2 py-1 text-sm font-medium text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
                           />
@@ -1394,12 +1449,15 @@ export default function Dashboard() {
                       分析した {report.totalReviewsAnalyzed} 件中、{cat.mentionCount} 件のレビューでこの観点への言及がありました。
                     </p>
                     {editingCategories && (
-                      <textarea
-                        value={categoryEditorValues[i]?.description || ''}
-                        onChange={(e) => updateCategoryDescription(i, e.target.value)}
-                        placeholder="このカテゴリで何を見たいかを入力してください"
-                        className="mb-3 min-h-20 w-full rounded border border-gray-300 px-3 py-2 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      />
+                      <div>
+                        <label className="mb-1 block text-[11px] font-semibold text-gray-400">AIへの指示（この観点で何を分析するか）</label>
+                        <textarea
+                          value={categoryEditorValues[i]?.description || ''}
+                          onChange={(e) => updateCategoryDescription(i, e.target.value)}
+                          placeholder="例: サイズ・素材・対応機種など購入前に確認する仕様情報"
+                          className="mb-3 min-h-16 w-full rounded border border-gray-300 px-3 py-2 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        />
+                      </div>
                     )}
                     <div>
                       <div className="mb-2 text-[11px] font-semibold tracking-wide text-gray-500">根拠として拾ったレビュー例</div>
@@ -1462,33 +1520,14 @@ export default function Dashboard() {
                   </button>
                 </div>
                 <div className="mt-2 rounded-lg bg-gray-50 px-4 py-3 text-xs leading-5 text-gray-600">
-                  <p>レビューから「この商品だけの強み（POD）」「最低限なければ困る機能（POP）」「妥協してもよい要素（POF）」を仕分けています。</p>
-                  <p className="mt-1">PODに投資を集中し、POPは確実に押さえ、POFはコストカットや仕様簡素化の判断材料としてお使いください。POX観点の調整から、ご自身の視点で再分類することもできます。</p>
+                  <p><strong>POD（差別化ポイント）</strong>＝ 競合にない、この商品ならではの強み。ここを伸ばすと選ばれる理由になります。</p>
+                  <p className="mt-1"><strong>POP（必須ポイント）</strong>＝ 買い手が当然あると期待する機能・品質。欠けると即マイナス評価につながります。</p>
+                  <p className="mt-1"><strong>POF（許容ポイント）</strong>＝ なくても購入判断に大きく影響しない要素。コスト削減や仕様簡素化の候補です。</p>
+                  <p className="mt-2 text-gray-500">「POX観点を調整」から、ご自身の視点でAIに再分類させることもできます。</p>
                 </div>
               </div>
               {editingPoxGuidance && (
                 <div className="mb-6 rounded-xl border border-blue-100 bg-blue-50/50 p-4">
-                  <div className="mb-3">
-                    <label className="mb-2 block text-sm font-medium text-gray-800">
-                      分析の深さ
-                    </label>
-                    <select
-                      value={analysisDepth}
-                      onChange={(e) => setAnalysisDepth(e.target.value as 'focused' | 'standard' | 'deep')}
-                      className="w-full rounded border border-gray-300 bg-white px-3 py-2 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    >
-                      <option value="focused">要点重視</option>
-                      <option value="standard">標準</option>
-                      <option value="deep">深掘り</option>
-                    </select>
-                    <p className="mt-1 text-xs text-gray-500">
-                      {analysisDepth === 'focused'
-                        ? '結論を短く整理して、判断しやすさを優先します。'
-                        : analysisDepth === 'deep'
-                          ? '根拠レビューと判断理由を厚めに出します。'
-                          : '具体性と読みやすさのバランスを取ります。'}
-                    </p>
-                  </div>
                   <label className="mb-2 block text-sm font-medium text-gray-800">
                     POX分析への追加指示
                   </label>

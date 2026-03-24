@@ -1,12 +1,26 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { validateAsin } from '@/lib/services/review-scraper'
 import { addProduct, getProductByAsin, listProducts } from '@/lib/store/review-memory-store'
+import { createClient } from '@/lib/supabase/server'
 
 export async function GET() {
-  return NextResponse.json({ products: listProducts() })
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) {
+    return NextResponse.json({ error: 'ログインが必要です' }, { status: 401 })
+  }
+
+  const products = await listProducts(supabase)
+  return NextResponse.json({ products })
 }
 
 export async function POST(request: NextRequest) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) {
+    return NextResponse.json({ error: 'ログインが必要です' }, { status: 401 })
+  }
+
   const body = await request.json()
   const { asin: rawAsin, name } = body
 
@@ -22,10 +36,11 @@ export async function POST(request: NextRequest) {
     )
   }
 
-  if (getProductByAsin(asin)) {
+  const existing = await getProductByAsin(supabase, asin)
+  if (existing) {
     return NextResponse.json({ error: 'この商品は既に登録されています' }, { status: 409 })
   }
 
-  const newProduct = addProduct({ asin, name })
+  const newProduct = await addProduct(supabase, user.id, { asin, name })
   return NextResponse.json({ product: newProduct }, { status: 201 })
 }

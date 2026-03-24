@@ -1,19 +1,26 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getCollectionByAsin, getReportByAsin, updateReportNotes } from '@/lib/store/review-memory-store'
+import { getCollectionByAsin, getReportByAsin, updateReportNotes, updateReportCategoryNames } from '@/lib/store/review-memory-store'
+import { createClient } from '@/lib/supabase/server'
 
 export async function GET(request: NextRequest) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) {
+    return NextResponse.json({ error: 'ログインが必要です' }, { status: 401 })
+  }
+
   const asin = request.nextUrl.searchParams.get('asin')?.trim()
 
   if (!asin) {
     return NextResponse.json({ error: 'asin が必要です' }, { status: 400 })
   }
 
-  const report = getReportByAsin(asin)
+  const report = await getReportByAsin(supabase, asin)
   if (!report) {
     return NextResponse.json({ error: '分析レポートが見つかりません' }, { status: 404 })
   }
 
-  const collection = getCollectionByAsin(asin)
+  const collection = await getCollectionByAsin(supabase, asin)
 
   return NextResponse.json({
     report,
@@ -37,15 +44,31 @@ export async function GET(request: NextRequest) {
 }
 
 export async function PATCH(request: NextRequest) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) {
+    return NextResponse.json({ error: 'ログインが必要です' }, { status: 401 })
+  }
+
   const body = await request.json()
   const asin = body.asin?.trim()
-  const notes = typeof body.notes === 'string' ? body.notes : ''
 
   if (!asin) {
     return NextResponse.json({ error: 'asin が必要です' }, { status: 400 })
   }
 
-  const report = updateReportNotes(asin, notes)
+  // 観点名の更新
+  if (Array.isArray(body.categoryNames)) {
+    const report = await updateReportCategoryNames(supabase, asin, body.categoryNames)
+    if (!report) {
+      return NextResponse.json({ error: '分析レポートが見つかりません' }, { status: 404 })
+    }
+    return NextResponse.json({ success: true, report })
+  }
+
+  // メモの更新
+  const notes = typeof body.notes === 'string' ? body.notes : ''
+  const report = await updateReportNotes(supabase, asin, notes)
   if (!report) {
     return NextResponse.json({ error: '分析レポートが見つかりません' }, { status: 404 })
   }

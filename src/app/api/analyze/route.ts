@@ -123,7 +123,8 @@ export async function POST(request: NextRequest) {
       console.log(`Chrome拡張からレビュー受信: ${reviewCollection.reviews.length}件 (low: ${reviewCollection.lowRatingReviews.length}, high: ${reviewCollection.highRatingReviews.length})`)
 
       const report = await analyzeReviews(reviewCollection, effectiveApiKey, { customCategories, poxGuidance, analysisDepth })
-      saveAnalysisResult({
+      const db = useBearerAuth ? admin : supabase
+      await saveAnalysisResult(db, user.id, {
         asin: reviewCollection.asin,
         productName: reviewCollection.productName,
         averageRating: reviewCollection.averageRating,
@@ -134,7 +135,6 @@ export async function POST(request: NextRequest) {
 
       // 使用量記録（モック分析は除外）
       if (!report.isMock) {
-        const db = useBearerAuth ? admin : supabase
         await db.from('analysis_usage').insert({
           user_id: user.id,
           asin: reviewCollection.asin,
@@ -175,9 +175,9 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const reviews = getCollectionByAsin(asin) || await fetchReviews(asin)
+    const reviews = await getCollectionByAsin(supabase, asin) || await fetchReviews(asin)
     const report = await analyzeReviews(reviews, effectiveApiKey, { customCategories, poxGuidance, analysisDepth })
-    saveAnalysisResult({
+    await saveAnalysisResult(supabase, user.id, {
       asin: reviews.asin,
       productName: reviews.productName,
       averageRating: reviews.averageRating,

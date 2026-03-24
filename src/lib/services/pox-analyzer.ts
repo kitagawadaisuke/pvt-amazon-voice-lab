@@ -289,8 +289,8 @@ function parseAIResponse(text: string, collection: ReviewCollection, options: An
       const sanitizedBreakdown = Array.isArray(parsed.categoryBreakdown)
         ? parsed.categoryBreakdown.map((item: CategoryBreakdown) => ({
             ...item,
-            mentionCount: typeof item.mentionCount === 'string' ? parseInt(String(item.mentionCount).replace(/[^0-9]/g, ''), 10) || 0 : (item.mentionCount || 0),
-            mentionRate: typeof item.mentionRate === 'string' ? parseInt(String(item.mentionRate).replace(/[^0-9]/g, ''), 10) || 0 : (item.mentionRate || 0),
+            mentionCount: typeof item.mentionCount === 'string' ? Math.round(parseFloat(String(item.mentionCount).replace(/[^0-9.]/g, '')) || 0) : (item.mentionCount || 0),
+            mentionRate: typeof item.mentionRate === 'string' ? Math.round(parseFloat(String(item.mentionRate).replace(/[^0-9.]/g, '')) || 0) : Math.round(item.mentionRate || 0),
             topMentions: sanitizeMentionList(item.topMentions, categoryFramework.find((category) => category.name === item.category)?.description),
           }))
         : []

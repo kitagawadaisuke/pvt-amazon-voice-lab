@@ -28,8 +28,6 @@
     'ページを再読み込みしてください',
     'There was a problem filtering reviews right now',
   ];
-  const OVERLAY_ID = 'reviewai-progress-overlay';
-
   function parseAmazonRatingText(text) {
     if (!text) return 0;
 
@@ -272,282 +270,8 @@
     });
   }
 
-  function ensureOverlay() {
-    let overlay = document.getElementById(OVERLAY_ID);
-    if (overlay) return overlay;
-
-    overlay = document.createElement('div');
-    overlay.id = OVERLAY_ID;
-    overlay.innerHTML = `
-      <div class="reviewai-header">
-        <div class="reviewai-title">Amazon Voice Lab</div>
-        <button type="button" class="reviewai-close" aria-label="閉じる">×</button>
-      </div>
-      <div class="reviewai-status">待機中</div>
-      <div class="reviewai-grid">
-        <div class="reviewai-card"><div class="reviewai-label">現在ページ</div><div class="reviewai-value" data-key="page">-</div></div>
-        <div class="reviewai-card"><div class="reviewai-label">取得件数</div><div class="reviewai-value" data-key="total">-</div></div>
-      </div>
-      <div class="reviewai-progress"><div class="reviewai-progress-fill"></div></div>
-      <div class="reviewai-subtext">レビュー取得の進行状況を表示しています</div>
-      <div class="reviewai-activity" aria-live="polite">
-        <span class="reviewai-spinner" aria-hidden="true"></span>
-        <span class="reviewai-activity-text">処理待機中</span>
-      </div>
-      <button type="button" class="reviewai-stop">取得を中止</button>
-      <button type="button" class="reviewai-analyze">分析へ進む</button>
-    `;
-
-    const style = document.createElement('style');
-    style.textContent = `
-      #${OVERLAY_ID} {
-        position: fixed;
-        right: 16px;
-        bottom: 16px;
-        z-index: 2147483647;
-        width: 320px;
-        padding: 14px;
-        border-radius: 14px;
-        background: rgba(15, 23, 42, 0.96);
-        color: #e2e8f0;
-        box-shadow: 0 18px 50px rgba(15, 23, 42, 0.35);
-        border: 1px solid rgba(148, 163, 184, 0.18);
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      }
-      #${OVERLAY_ID}.reviewai-hidden { display: none; }
-      #${OVERLAY_ID} .reviewai-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin-bottom: 10px;
-      }
-      #${OVERLAY_ID} .reviewai-title {
-        font-size: 15px;
-        font-weight: 700;
-      }
-      #${OVERLAY_ID} .reviewai-close {
-        border: 0;
-        background: transparent;
-        color: #94a3b8;
-        font-size: 18px;
-        cursor: pointer;
-      }
-      #${OVERLAY_ID} .reviewai-status {
-        font-size: 13px;
-        margin-bottom: 10px;
-        color: #cbd5e1;
-      }
-      #${OVERLAY_ID} .reviewai-grid {
-        display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 8px;
-        margin-bottom: 10px;
-      }
-      #${OVERLAY_ID} .reviewai-card {
-        border-radius: 10px;
-        padding: 8px;
-        background: rgba(30, 41, 59, 0.9);
-        border: 1px solid rgba(71, 85, 105, 0.55);
-      }
-      #${OVERLAY_ID} .reviewai-label {
-        color: #94a3b8;
-        font-size: 11px;
-        margin-bottom: 3px;
-      }
-      #${OVERLAY_ID} .reviewai-value {
-        font-size: 14px;
-        font-weight: 700;
-      }
-      #${OVERLAY_ID} .reviewai-progress {
-        height: 8px;
-        border-radius: 999px;
-        overflow: hidden;
-        background: rgba(51, 65, 85, 0.9);
-        margin-bottom: 10px;
-      }
-      #${OVERLAY_ID} .reviewai-progress-fill {
-        width: 0%;
-        height: 100%;
-        background: linear-gradient(90deg, #38bdf8, #34d399);
-        transition: width 0.25s ease;
-      }
-      #${OVERLAY_ID} .reviewai-subtext {
-        font-size: 12px;
-        color: #94a3b8;
-        margin-bottom: 10px;
-      }
-      #${OVERLAY_ID} .reviewai-activity {
-        display: none;
-        align-items: center;
-        gap: 8px;
-        margin-bottom: 10px;
-        padding: 8px 10px;
-        border-radius: 10px;
-        background: rgba(30, 41, 59, 0.8);
-        color: #cbd5e1;
-        font-size: 12px;
-      }
-      #${OVERLAY_ID} .reviewai-spinner {
-        width: 14px;
-        height: 14px;
-        border-radius: 999px;
-        border: 2px solid rgba(148, 163, 184, 0.35);
-        border-top-color: #38bdf8;
-        animation: reviewai-spin 0.8s linear infinite;
-        flex-shrink: 0;
-      }
-      #${OVERLAY_ID}[data-state="analyzing"] .reviewai-activity {
-        display: flex;
-      }
-      #${OVERLAY_ID}[data-state="analyzing"] .reviewai-analyze {
-        display: block;
-        opacity: 0.75;
-        cursor: progress;
-      }
-      #${OVERLAY_ID}[data-state="analyzing"] .reviewai-stop {
-        display: none;
-      }
-      #${OVERLAY_ID}[data-state="analyzing"] .reviewai-progress-fill {
-        animation: reviewai-pulse 1.4s ease-in-out infinite;
-      }
-      #${OVERLAY_ID} .reviewai-stop {
-        width: 100%;
-        padding: 9px 10px;
-        border: 0;
-        border-radius: 10px;
-        background: #dc2626;
-        color: white;
-        font-weight: 700;
-        cursor: pointer;
-      }
-      #${OVERLAY_ID} .reviewai-analyze {
-        width: 100%;
-        margin-top: 8px;
-        padding: 9px 10px;
-        border: 0;
-        border-radius: 10px;
-        background: linear-gradient(135deg, #059669, #10b981);
-        color: white;
-        font-weight: 700;
-        cursor: pointer;
-        display: none;
-      }
-      #${OVERLAY_ID}[data-state="completed"] .reviewai-stop,
-      #${OVERLAY_ID}[data-state="blocked"] .reviewai-stop {
-        display: none;
-      }
-      #${OVERLAY_ID}[data-state="completed"] .reviewai-analyze,
-      #${OVERLAY_ID}[data-state="blocked"] .reviewai-analyze {
-        display: block;
-      }
-      @keyframes reviewai-spin {
-        to { transform: rotate(360deg); }
-      }
-      @keyframes reviewai-pulse {
-        0% { opacity: 0.7; }
-        50% { opacity: 1; }
-        100% { opacity: 0.7; }
-      }
-      @media (max-width: 640px) {
-        #${OVERLAY_ID} {
-          left: 12px;
-          right: 12px;
-          bottom: 12px;
-          width: auto;
-        }
-      }
-    `;
-
-    document.documentElement.appendChild(style);
-    document.body.appendChild(overlay);
-
-    overlay.querySelector('.reviewai-close').addEventListener('click', () => {
-      overlay.classList.add('reviewai-hidden');
-    });
-    overlay.querySelector('.reviewai-stop').addEventListener('click', () => {
-      stopCollection();
-      renderOverlay({
-        collecting: false,
-        reviews: [],
-      }, {
-        statusText: '取得を中止しました',
-        stateKey: 'blocked',
-      });
-    });
-    overlay.querySelector('.reviewai-analyze').addEventListener('click', async () => {
-      const state = await loadCollectionState();
-      await runAnalyzeFlow(state);
-    });
-
-    return overlay;
-  }
-
-  function renderOverlay(state, options = {}) {
-    if (!document.body) return;
-    const overlay = ensureOverlay();
-    overlay.classList.remove('reviewai-hidden');
-
-    const total = state?.reviews?.length || 0;
-    const textReviewCount = state?.textReviewCount || 0;
-    const targetReviewCount = state?.targetReviewCount || 0;
-    const currentPage = state?.currentPage || 0;
-    const maxPages = options.maxPages || state?.displayTotalPages || state?.currentPage || 1;
-    const progressBase = targetReviewCount || textReviewCount || state?.productInfo?.totalReviews || 100;
-    const progressRate = Math.max(0, Math.min((total / progressBase) * 100, 100));
-    const commentCoverageRate = textReviewCount > 0
-      ? Math.min(100, (total / textReviewCount) * 100)
-      : 0;
-    const currentFilterCount = state?.phase && state.phase !== 'all'
-      ? (state?.filterReviewCounts?.[state.phase] || 0)
-      : 0;
-    const currentFilterCollected = state?.phase && state.phase !== 'all'
-      ? Math.max(0, total - (state?.phaseStartTotal || 0))
-      : 0;
-    const stateKey = options.stateKey || (state?.blocked ? 'blocked' : state?.analyzing ? 'analyzing' : state?.collecting ? 'collecting' : 'completed');
-
-    overlay.dataset.state = stateKey;
-    overlay.querySelector('.reviewai-status').textContent = options.statusText
-      || (stateKey === 'blocked'
-        ? (state?.blockReason || 'Amazon側で制限を検知しました')
-        : stateKey === 'analyzing'
-          ? '分析を実行中です。しばらくお待ちください'
-        : stateKey === 'completed'
-          ? `取得完了: ${total}件`
-          : `${getFilterLabel(state?.phase || 'all')} - ページ${currentPage}/${maxPages} を取得中`);
-    overlay.querySelector('[data-key="page"]').textContent = `${currentPage}/${maxPages}`;
-    overlay.querySelector('[data-key="total"]').textContent = `${total}件`;
-    overlay.querySelector('.reviewai-progress-fill').style.width = `${progressRate}%`;
-    overlay.querySelector('.reviewai-subtext').textContent = options.subtext
-      || (stateKey === 'collecting'
-        ? (state?.phase && state.phase !== 'all' && currentFilterCount > 0
-          ? `${getFilterLabel(state.phase)}レビュー ${currentFilterCollected} / ${currentFilterCount}件を取得済み`
-          : `コメント付きレビュー ${textReviewCount || '-'}件中 ${total}件を取得済み（${commentCoverageRate.toFixed(1)}%）`)
-        : stateKey === 'analyzing'
-          ? 'レビュー送信後に分析を実行しています。画面を閉じずにそのままお待ちください'
-        : stateKey === 'completed'
-          ? `コメント付きレビュー ${textReviewCount || '-'}件中 ${total}件を取得しました（${commentCoverageRate.toFixed(1)}%）`
-          : '再開するには拡張から再実行してください');
-    const activityText = overlay.querySelector('.reviewai-activity-text');
-    activityText.textContent = options.activityText
-      || (stateKey === 'analyzing'
-        ? '分析リクエストを送信中です'
-        : '処理待機中');
-    const analyzeButton = overlay.querySelector('.reviewai-analyze');
-    analyzeButton.disabled = stateKey === 'collecting' || stateKey === 'analyzing';
-    analyzeButton.textContent = stateKey === 'analyzing'
-      ? '分析中です。しばらくお待ちください'
-      : stateKey === 'completed'
-        ? '分析完了'
-        : '分析を再実行';
-  }
-
   async function runAnalyzeFlow(state) {
     if (!state || !state.reviews || state.reviews.length === 0) {
-      renderOverlay(state || { reviews: [] }, {
-        stateKey: 'blocked',
-        statusText: '分析できるレビューがありません',
-        subtext: '先にレビュー取得を完了してください',
-      });
       return;
     }
 
@@ -583,13 +307,6 @@
       total: state.reviews.length,
       productInfo: state.productInfo,
     }).catch(() => {});
-
-    renderOverlay(analyzingState, {
-      stateKey: 'analyzing',
-      statusText: '分析を実行中です。しばらくお待ちください',
-      subtext: 'レビューを送信し、POX分析を生成しています',
-      activityText: 'Amazon Voice Labサーバーで分析処理を進めています',
-    });
 
     try {
       let { accessToken, refreshToken } = await new Promise((resolve) =>
@@ -678,12 +395,6 @@
           productInfo: state.productInfo,
         }).catch(() => {});
         window.open(`${serverUrl}/dashboard?asin=${state.productInfo?.asin}`, '_blank', 'noopener,noreferrer');
-        renderOverlay(completedState, {
-          stateKey: 'completed',
-          statusText: '分析完了',
-          subtext: 'ダッシュボードを新しいタブで開きました',
-          activityText: '分析が完了しました',
-        });
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'unknown error';
@@ -699,11 +410,6 @@
         error: message,
         total: state.reviews.length,
       }).catch(() => {});
-      renderOverlay(state, {
-        stateKey: 'blocked',
-        statusText: '分析に失敗しました',
-        subtext: message,
-      });
     }
   }
 
@@ -903,11 +609,6 @@
       reason,
       total: nextState.reviews.length,
     }).catch(() => {});
-    renderOverlay(nextState, {
-      stateKey: 'blocked',
-      statusText: reason,
-      subtext: `取得済み ${nextState.reviews.length}件`,
-    });
   }
 
   async function finalizeCollection(state) {
@@ -924,11 +625,6 @@
       textReviewCount: nextState.textReviewCount || 0,
       phase: nextState.phase,
     }).catch(() => {});
-    renderOverlay(nextState, {
-      stateKey: 'completed',
-      statusText: `取得完了: ${nextState.reviews.length}件`,
-      subtext: 'レビュー取得完了。自動でPOX分析へ進みます',
-    });
 
     await runAnalyzeFlow(nextState);
   }
@@ -1007,11 +703,6 @@
     console.log(
       `[ReviewAI] Arrived at reviews page. phase=${state.phase}, expectedPage=${state.currentPage}, actualPage=${actualPage}, expectedFilter=${state.phase}, actualFilter=${actualFilter}, collected=${state.reviews.length}, fromDomUpdate=${fromDomUpdate}`
     );
-    renderOverlay(state, {
-      stateKey: 'collecting',
-      statusText: `${getFilterLabel(state.phase || 'all')} - ページ${actualPage} 読み込み中`,
-      subtext: 'レビューDOMの更新を待っています',
-    });
 
     // 少し待ってDOMが完全にロードされるのを待つ
     await new Promise((resolve) => setTimeout(resolve, fromDomUpdate ? 500 : 1500));
@@ -1112,13 +803,6 @@
       maxPages: state.displayTotalPages || maxPages,
       zeroNewPages: state.zeroNewPages,
     }).catch(() => {});
-    renderOverlay(state, {
-      stateKey: 'collecting',
-      addedCount,
-      maxPages: state.displayTotalPages || maxPages,
-      statusText: `${getFilterLabel(state.phase)} - ページ${state.currentPage}/${state.displayTotalPages || maxPages} を取得中`,
-      subtext: '',
-    });
 
     console.log(
       `[ReviewAI] Pagination check: hasNext=${hasNextPage}, nextPage=${nextPageNum}, maxPages=${maxPages}, addedCount=${addedCount}, zeroNewPages=${state.zeroNewPages}, zeroNewLimit=${zeroNewPageLimit}, target=${state.targetReviewCount || 0}`
@@ -1144,12 +828,6 @@
       const waitTime = randomDelay(8000, 12000);
       const filterUrl = buildReviewPageUrl(asin, 1, nextFilter);
       console.log(`[ReviewAI] Moving to next star filter ${nextFilter} after ${Math.round(waitTime / 1000)}s: ${filterUrl}`);
-      renderOverlay(state, {
-        stateKey: 'collecting',
-        maxPages: state.displayTotalPages || 1,
-        statusText: `${getFilterLabel(nextFilter)} のレビュー取得へ移行します`,
-        subtext: '',
-      });
       await new Promise((resolve) => setTimeout(resolve, waitTime));
       window.location.href = filterUrl;
       return;
@@ -1215,11 +893,6 @@
 
       // コレクション状態を初期化してレビューページに遷移
       const state = createInitialState(asin, info);
-      renderOverlay(state, {
-        stateKey: 'collecting',
-        statusText: 'レビュー取得を開始します',
-        subtext: 'レビューページへ移動しています',
-      });
 
       saveCollectionState(state).then(() => {
         const url = buildReviewPageUrl(asin, 1, state.phase);
@@ -1241,6 +914,18 @@
       loadCollectionState().then((state) => {
         const reviews = state ? state.reviews : [];
         sendResponse({ reviews, productInfo: state?.productInfo || getProductInfo() });
+      });
+      return true;
+    }
+
+    if (msg.type === 'START_ANALYSIS') {
+      loadCollectionState().then(async (state) => {
+        if (!state || !state.reviews || state.reviews.length === 0) {
+          sendResponse({ error: '分析できるレビューがありません' });
+          return;
+        }
+        sendResponse({ started: true });
+        await runAnalyzeFlow(state);
       });
       return true;
     }

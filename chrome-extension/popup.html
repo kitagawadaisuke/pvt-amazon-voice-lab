@@ -62,27 +62,6 @@
       color: #94a3b8;
       margin-top: 4px;
     }
-    .progress-meta {
-      margin-top: 10px;
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 8px;
-      font-size: 12px;
-    }
-    .meta-card {
-      background: #1e293b;
-      border: 1px solid #334155;
-      border-radius: 8px;
-      padding: 8px;
-    }
-    .meta-label {
-      color: #94a3b8;
-      margin-bottom: 3px;
-    }
-    .meta-value {
-      color: #e2e8f0;
-      font-weight: 600;
-    }
     button {
       width: 100%;
       padding: 10px;
@@ -170,29 +149,12 @@
         <div class="progress-fill" id="progressFill" style="width:0%"></div>
       </div>
       <div class="progress-text" id="progressText">取得中...</div>
-      <div class="progress-meta">
-        <div class="meta-card">
-          <div class="meta-label">現在ページ</div>
-          <div class="meta-value" id="currentPageMeta">-</div>
-        </div>
-        <div class="meta-card">
-          <div class="meta-label">取得率</div>
-          <div class="meta-value" id="captureRateMeta">-</div>
-        </div>
-        <div class="meta-card">
-          <div class="meta-label">コメント付き</div>
-          <div class="meta-value" id="textReviewMeta">-</div>
-        </div>
-        <div class="meta-card">
-          <div class="meta-label">今回追加</div>
-          <div class="meta-value" id="addedCountMeta">-</div>
-        </div>
-      </div>
     </div>
   </div>
 
   <button id="startBtn" class="btn-primary" style="display:none;">レビューを取得する</button>
   <button id="stopBtn" class="btn-stop" style="display:none;">取得を中止</button>
+  <button id="analyzeBtn" class="btn-analyze" style="display:none;">分析へ進む</button>
   <button id="resetBtn" style="display:none; width:100%; padding:6px; border:1px solid #475569; border-radius:6px; background:transparent; color:#94a3b8; font-size:12px; cursor:pointer; margin-top:8px;">データをリセット</button>
 
   <div style="margin-top:12px; padding:10px; background:#1e293b; border:1px solid #334155; border-radius:8px; font-size:11px; color:#94a3b8; line-height:1.5;">
