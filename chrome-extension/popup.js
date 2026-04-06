@@ -28,6 +28,11 @@ function isSameProduct(left, right) {
   return !!left?.asin && !!right?.asin && left.asin === right.asin;
 }
 
+// 設定パネル開閉
+document.getElementById('settingsToggle').addEventListener('click', () => {
+  document.getElementById('settingsPanel').classList.toggle('open');
+});
+
 // 設定を読み込み
 chrome.storage.local.get(['serverUrl'], (result) => {
   serverUrlInput.value = result.serverUrl || 'http://localhost:3000';
@@ -248,7 +253,7 @@ function showProductInfo(info) {
   // 評価数の内訳を表示
   const breakdownDiv = document.getElementById('reviewBreakdown');
   const totalRatingsEl = document.getElementById('totalRatings');
-  breakdownDiv.style.display = 'block';
+  breakdownDiv.style.display = 'flex';
   totalRatingsEl.textContent = `${info.totalReviews}件`;
 }
 

@@ -5,29 +5,45 @@
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
-      width: 360px;
+      width: 340px;
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
       background: #0f172a;
       color: #e2e8f0;
-      padding: 16px;
+      padding: 14px;
     }
     .header {
       display: flex;
       align-items: center;
-      gap: 8px;
-      margin-bottom: 16px;
+      justify-content: space-between;
+      margin-bottom: 12px;
     }
     .header h1 {
-      font-size: 18px;
+      font-size: 16px;
       background: linear-gradient(135deg, #3b82f6, #8b5cf6);
       -webkit-background-clip: text;
       -webkit-text-fill-color: transparent;
     }
+    .settings-toggle {
+      background: none;
+      border: 1px solid #334155;
+      border-radius: 6px;
+      color: #94a3b8;
+      font-size: 16px;
+      width: 32px;
+      height: 32px;
+      padding: 0;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: background 0.2s;
+    }
+    .settings-toggle:hover { background: #1e293b; }
     .status {
-      padding: 12px;
-      border-radius: 8px;
-      margin-bottom: 12px;
-      font-size: 13px;
+      padding: 8px 10px;
+      border-radius: 6px;
+      margin-bottom: 10px;
+      font-size: 12px;
     }
     .status.info { background: #1e293b; border: 1px solid #334155; }
     .status.success { background: #064e3b; border: 1px solid #059669; }
@@ -36,31 +52,39 @@
     .product-info {
       background: #1e293b;
       border-radius: 8px;
-      padding: 12px;
-      margin-bottom: 12px;
-      font-size: 13px;
+      padding: 10px;
+      margin-bottom: 10px;
+      font-size: 12px;
     }
-    .product-info .title { font-weight: 600; margin-bottom: 4px; }
-    .product-info .asin { color: #94a3b8; font-size: 12px; }
-    .progress {
-      margin-bottom: 12px;
+    .product-info .title { font-weight: 600; margin-bottom: 3px; line-height: 1.4; }
+    .product-info .asin { color: #94a3b8; font-size: 11px; }
+    .product-info .review-stats {
+      display: flex;
+      gap: 12px;
+      margin-top: 6px;
+      padding-top: 6px;
+      border-top: 1px solid #334155;
+      font-size: 11px;
+      color: #94a3b8;
     }
+    .product-info .review-stats span { color: #e2e8f0; font-weight: 600; }
+    .progress { margin-bottom: 10px; }
     .progress-bar {
-      height: 6px;
+      height: 4px;
       background: #334155;
-      border-radius: 3px;
+      border-radius: 2px;
       overflow: hidden;
     }
     .progress-fill {
       height: 100%;
       background: linear-gradient(90deg, #3b82f6, #8b5cf6);
-      border-radius: 3px;
+      border-radius: 2px;
       transition: width 0.3s;
     }
     .progress-text {
-      font-size: 12px;
+      font-size: 11px;
       color: #94a3b8;
-      margin-top: 4px;
+      margin-top: 3px;
     }
     button {
       width: 100%;
@@ -81,46 +105,55 @@
     .btn-analyze {
       background: linear-gradient(135deg, #059669, #10b981);
       color: white;
-      margin-top: 8px;
+      margin-top: 6px;
     }
     .btn-stop {
       background: #dc2626;
       color: white;
     }
     .review-count {
-      font-size: 24px;
+      font-size: 22px;
       font-weight: 700;
       text-align: center;
-      margin: 8px 0;
+      margin: 6px 0;
       background: linear-gradient(135deg, #3b82f6, #8b5cf6);
       -webkit-background-clip: text;
       -webkit-text-fill-color: transparent;
     }
-    .settings {
-      margin-top: 12px;
-      padding-top: 12px;
+    .settings-panel {
+      margin-top: 10px;
+      padding-top: 10px;
       border-top: 1px solid #334155;
+      display: none;
     }
-    .settings label {
-      font-size: 12px;
+    .settings-panel.open { display: block; }
+    .settings-panel label {
+      font-size: 11px;
       color: #94a3b8;
       display: block;
-      margin-bottom: 4px;
+      margin-bottom: 3px;
     }
-    .settings input {
+    .settings-panel input {
       width: 100%;
-      padding: 8px;
+      padding: 6px 8px;
       border-radius: 6px;
       border: 1px solid #334155;
       background: #1e293b;
       color: #e2e8f0;
-      font-size: 13px;
+      font-size: 12px;
+    }
+    .note {
+      font-size: 10px;
+      color: #64748b;
+      margin-top: 10px;
+      text-align: center;
     }
   </style>
 </head>
 <body>
   <div class="header">
-    <h1>📊 Amazon Voice Lab</h1>
+    <h1>Amazon Voice Lab</h1>
+    <button class="settings-toggle" id="settingsToggle" title="設定">&#9881;</button>
   </div>
 
   <div id="statusBox" class="status info">
@@ -130,15 +163,9 @@
   <div id="productInfo" class="product-info" style="display:none;">
     <div class="title" id="productTitle"></div>
     <div class="asin" id="productAsin"></div>
-    <div id="reviewBreakdown" style="display:none; margin-top:8px; padding:8px; background:#0f172a; border-radius:6px; font-size:12px;">
-      <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
-        <span style="color:#94a3b8;">総評価数（星のみ含む）</span>
-        <span style="color:#e2e8f0; font-weight:600;" id="totalRatings">-</span>
-      </div>
-      <div style="display:flex; justify-content:space-between;">
-        <span style="color:#94a3b8;">コメント付きレビュー数</span>
-        <span style="color:#3b82f6; font-weight:600;" id="textReviews">取得開始後に判明</span>
-      </div>
+    <div id="reviewBreakdown" class="review-stats" style="display:none;">
+      <div>評価数 <span id="totalRatings">-</span></div>
+      <div>コメント <span id="textReviews">-</span></div>
     </div>
   </div>
 
@@ -155,28 +182,27 @@
   <button id="startBtn" class="btn-primary" style="display:none;">レビューを取得する</button>
   <button id="stopBtn" class="btn-stop" style="display:none;">取得を中止</button>
   <button id="analyzeBtn" class="btn-analyze" style="display:none;">分析へ進む</button>
-  <button id="resetBtn" style="display:none; width:100%; padding:6px; border:1px solid #475569; border-radius:6px; background:transparent; color:#94a3b8; font-size:12px; cursor:pointer; margin-top:8px;">データをリセット</button>
+  <button id="resetBtn" style="display:none; width:100%; padding:5px; border:1px solid #475569; border-radius:6px; background:transparent; color:#94a3b8; font-size:11px; cursor:pointer; margin-top:6px;">データをリセット</button>
 
-  <div style="margin-top:12px; padding:10px; background:#1e293b; border:1px solid #334155; border-radius:8px; font-size:11px; color:#94a3b8; line-height:1.5;">
-    ⚠ 一度に取得できるのは1商品ずつです。取得中に別の商品で開始しないでください。
-  </div>
-
-  <div class="settings">
-    <label>Amazon Voice Lab サーバーURL</label>
+  <div class="settings-panel" id="settingsPanel">
+    <label>サーバーURL</label>
     <input type="text" id="serverUrl" placeholder="http://localhost:3000" />
 
-    <div id="authSection" style="margin-top:12px;">
+    <div id="authSection" style="margin-top:10px;">
       <div id="authLoggedOut" style="display:none;">
-        <button id="googleLoginBtn" class="btn-primary" style="font-size:13px; padding:8px;">Googleでログイン</button>
+        <button id="googleLoginBtn" class="btn-primary" style="font-size:12px; padding:7px;">Googleでログイン</button>
       </div>
-      <div id="authLoggedIn" style="display:none; padding:8px; background:#1e293b; border-radius:6px; border:1px solid #334155;">
-        <div style="font-size:12px; color:#94a3b8; margin-bottom:4px;">ログイン中</div>
-        <div style="font-size:13px; color:#e2e8f0; margin-bottom:8px; word-break:break-all;" id="authEmail"></div>
-        <button id="logoutBtn" style="width:100%; padding:5px; border:1px solid #475569; border-radius:6px; background:transparent; color:#94a3b8; font-size:12px; cursor:pointer;">ログアウト</button>
+      <div id="authLoggedIn" style="display:none; padding:6px; background:#1e293b; border-radius:6px; border:1px solid #334155;">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <div style="font-size:11px; color:#e2e8f0; word-break:break-all;" id="authEmail"></div>
+          <button id="logoutBtn" style="width:auto; padding:3px 8px; border:1px solid #475569; border-radius:4px; background:transparent; color:#94a3b8; font-size:10px; cursor:pointer; white-space:nowrap; margin-left:8px;">ログアウト</button>
+        </div>
       </div>
-      <div id="authLoading" style="font-size:12px; color:#94a3b8;">認証状態を確認中...</div>
+      <div id="authLoading" style="font-size:11px; color:#94a3b8;">認証確認中...</div>
     </div>
   </div>
+
+  <div class="note">1商品ずつ取得してください</div>
 
   <script src="popup.js"></script>
 </body>
