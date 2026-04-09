@@ -159,3 +159,32 @@ alter table public.review_collections enable row level security;
 create policy "Users can manage own review_collections"
   on public.review_collections for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 create index idx_review_collections_user_asin on public.review_collections(user_id, asin);
+
+-- レビュー収集ジョブ（リアルタイム進捗配信用）
+create table public.collection_jobs (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid references public.profiles(id) on delete cascade not null,
+  asin text not null,
+  product_name text,
+  status text default 'pending'
+    check (status in ('pending', 'collecting', 'analyzing', 'completed', 'blocked', 'cancelled')),
+  phase text,
+  current_page integer default 0,
+  total_collected integer default 0,
+  text_review_count integer default 0,
+  display_total_pages integer default 0,
+  completed_filters text[] default '{}',
+  block_reason text,
+  started_at timestamptz,
+  completed_at timestamptz,
+  created_at timestamptz default now(),
+  updated_at timestamptz default now()
+);
+
+alter table public.collection_jobs enable row level security;
+create policy "Users can manage own collection_jobs"
+  on public.collection_jobs for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+create index idx_collection_jobs_user_status on public.collection_jobs(user_id, status);
+
+-- Realtime を有効化（Supabase ダッシュボードでも設定可能）
+alter publication supabase_realtime add table collection_jobs;

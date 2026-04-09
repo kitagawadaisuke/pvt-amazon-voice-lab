@@ -114,6 +114,10 @@ export async function analyzeReviews(
     })
 
     const data = await response.json()
+    if (!response.ok || !data.content) {
+      console.error('Anthropic API error:', JSON.stringify(data, null, 2))
+      throw new Error(data.error?.message || `API returned ${response.status}`)
+    }
     const text = data.content[0].text
     return parseAIResponse(text, collection, options)
   } catch (error) {

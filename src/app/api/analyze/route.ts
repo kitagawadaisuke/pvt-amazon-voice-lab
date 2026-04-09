@@ -142,6 +142,13 @@ export async function POST(request: NextRequest) {
         })
       }
 
+      // collection_jobs のステータスを completed に更新
+      await admin.from('collection_jobs')
+        .update({ status: 'completed', completed_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+        .eq('user_id', user.id)
+        .eq('asin', reviewCollection.asin)
+        .in('status', ['collecting', 'analyzing', 'pending'])
+
       return NextResponse.json({
         success: true,
         report,

@@ -401,5 +401,13 @@ resetBtn.addEventListener('click', () => {
   });
 });
 
+document.getElementById('openDashboardBtn').addEventListener('click', async () => {
+  const { serverUrl } = await new Promise((resolve) =>
+    chrome.storage.local.get(['serverUrl'], resolve)
+  );
+  const url = (serverUrl || 'http://localhost:3000').replace(/\/$/, '');
+  window.open(`${url}/dashboard`, '_blank', 'noopener,noreferrer');
+});
+
 checkAuthState();
 init();

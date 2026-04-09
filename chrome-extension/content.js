@@ -270,6 +270,38 @@
     });
   }
 
+  // サーバーへ収集進捗を報告（Supabase Realtime 経由でダッシュボードに配信）
+  async function reportProgressToServer(state) {
+    try {
+      const { accessToken, serverUrl } = await new Promise((resolve) =>
+        chrome.storage.local.get(['accessToken', 'serverUrl'], resolve)
+      );
+      if (!accessToken || !serverUrl) return;
+
+      await fetch(`${serverUrl.replace(/\/$/, '')}/api/collection-progress`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({
+          asin: state.asin || state.productInfo?.asin,
+          productName: state.productInfo?.title,
+          phase: state.phase,
+          currentPage: state.currentPage,
+          totalReviews: state.reviews?.length || 0,
+          textReviewCount: state.textReviewCount || 0,
+          status: state.collecting ? 'collecting' : state.analyzing ? 'analyzing' : state.blocked ? 'blocked' : 'completed',
+          displayTotalPages: state.displayTotalPages || 0,
+          completedFilters: state.completedFilters || [],
+          blockReason: state.blockReason || null,
+        }),
+      });
+    } catch {
+      // サイレント失敗（レビュー収集は継続）
+    }
+  }
+
   async function runAnalyzeFlow(state) {
     if (!state || !state.reviews || state.reviews.length === 0) {
       return;
@@ -609,6 +641,7 @@
       reason,
       total: nextState.reviews.length,
     }).catch(() => {});
+    reportProgressToServer(nextState);
   }
 
   async function finalizeCollection(state) {
@@ -625,6 +658,7 @@
       textReviewCount: nextState.textReviewCount || 0,
       phase: nextState.phase,
     }).catch(() => {});
+    reportProgressToServer(nextState);
 
     await runAnalyzeFlow(nextState);
   }
@@ -803,6 +837,7 @@
       maxPages: state.displayTotalPages || maxPages,
       zeroNewPages: state.zeroNewPages,
     }).catch(() => {});
+    reportProgressToServer(state);
 
     console.log(
       `[ReviewAI] Pagination check: hasNext=${hasNextPage}, nextPage=${nextPageNum}, maxPages=${maxPages}, addedCount=${addedCount}, zeroNewPages=${state.zeroNewPages}, zeroNewLimit=${zeroNewPageLimit}, target=${state.targetReviewCount || 0}`

@@ -1,9 +1,18 @@
 {
   "manifest_version": 3,
   "name": "Amazon Voice Lab - Amazonレビュー分析",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Amazonレビューを収集し、商品企画と訴求設計に活かすChrome拡張",
-  "permissions": ["activeTab", "storage", "identity"],
+  "permissions": ["activeTab", "storage", "identity", "tabs"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "externally_connectable": {
+    "matches": [
+      "http://localhost/*",
+      "https://*.vercel.app/*"
+    ]
+  },
   "action": {
     "default_popup": "popup.html",
     "default_icon": {

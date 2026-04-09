@@ -3,6 +3,8 @@
 import { useState, useEffect, useRef, useCallback, Suspense } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
 import type { CategoryDefinition } from '@/lib/services/pox-analyzer'
+import { useExtension } from '@/lib/hooks/useExtension'
+import { CollectionProgress } from './components/CollectionProgress'
 
 interface Product {
   id: string
@@ -429,12 +431,103 @@ function DashboardContent() {
     planConfig: { compareLimit: number; byokAllowed: boolean; depths: string[] }
   } | null>(null)
 
+  // Chrome拡張連携
+  const extension = useExtension()
+  const [collectAsinInput, setCollectAsinInput] = useState('')
+  const [collectError, setCollectError] = useState<string | null>(null)
+  const [collecting, setCollecting] = useState(false)
+
+  const handleStartCollection = useCallback(async () => {
+    const asinRaw = collectAsinInput.trim()
+    if (!asinRaw) return
+
+    // ASIN or URLからASINを抽出
+    const asinMatch = asinRaw.match(/\b(B[0-9A-Z]{9}|[0-9]{10})\b/)
+      || asinRaw.match(/amazon\.co\.jp.*?\/(?:dp|product|gp\/product)\/([A-Z0-9]{10})/)
+      || asinRaw.match(/amazon\.com.*?\/(?:dp|product|gp\/product)\/([A-Z0-9]{10})/)
+    const asin = asinMatch ? (asinMatch[1] || asinMatch[0]) : null
+
+    if (!asin) {
+      setCollectError('有効なASIN（例: B0DEMO12345）またはAmazon商品URLを入力してください')
+      return
+    }
+
+    setCollectError(null)
+    setCollecting(true)
+
+    try {
+      // 1. collection_jobs にレコード作成
+      await fetch('/api/collection-jobs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ asin }),
+      })
+
+      // 2. 拡張に収集開始を指示
+      if (extension.installed) {
+        // Supabase セッションからトークンを取得
+        const { createClient } = await import('@/lib/supabase/client')
+        const supabase = createClient()
+        const { data: { session } } = await supabase.auth.getSession()
+
+        const result = await extension.startCollection({
+          asin,
+          accessToken: session?.access_token || '',
+          refreshToken: session?.refresh_token || '',
+          email: session?.user?.email || '',
+          serverUrl: window.location.origin,
+        })
+
+        if (result.error) {
+          setCollectError(result.error)
+          setCollecting(false)
+          return
+        }
+      } else {
+        setCollectError('Chrome拡張が検出されません。拡張をインストールして再読み込みしてください。')
+        setCollecting(false)
+        return
+      }
+
+      setCollectAsinInput('')
+    } catch (err) {
+      setCollectError(err instanceof Error ? err.message : '収集の開始に失敗しました')
+      setCollecting(false)
+    }
+  }, [collectAsinInput, extension])
+
+  const handleCollectionComplete = useCallback((asin: string) => {
+    setCollecting(false)
+    // 分析完了後にレポートを自動表示
+    router.push(`/dashboard?asin=${encodeURIComponent(asin)}`)
+  }, [router])
+
   // ユーザー情報・使用量取得
   useEffect(() => {
     fetch('/api/user').then(r => r.ok ? r.json() : null).then(d => {
       if (d) setUserInfo(d)
     })
   }, [])
+
+  // 拡張が検出されたら認証を自動同期
+  useEffect(() => {
+    if (!extension.installed || !userInfo) return
+    const syncExtAuth = async () => {
+      const { createClient } = await import('@/lib/supabase/client')
+      const supabase = createClient()
+      const { data: { session } } = await supabase.auth.getSession()
+      if (session) {
+        extension.syncAuth({
+          accessToken: session.access_token,
+          refreshToken: session.refresh_token || '',
+          email: session.user?.email || '',
+          serverUrl: window.location.origin,
+        })
+      }
+    }
+    syncExtAuth()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [extension.installed, userInfo])
 
   // localStorageからAPIキーを復元
   useEffect(() => {
@@ -1043,6 +1136,66 @@ function DashboardContent() {
 
         {activeTab === 'products' && (
           <>
+            {/* レビュー収集 & 分析 */}
+            <div className="bg-white rounded-xl border border-gray-200 p-6 mb-6">
+              <h2 className="text-lg font-semibold text-gray-900 mb-3">レビュー収集 & 分析</h2>
+
+              {extension.installed === false && (
+                <div className="mb-4 rounded-lg bg-amber-50 border border-amber-200 px-4 py-3 text-sm text-amber-800">
+                  Chrome拡張が検出されません。<code className="bg-amber-100 px-1 rounded">chrome-extension/</code> フォルダを
+                  <code className="bg-amber-100 px-1 rounded">chrome://extensions</code> から読み込んでください。
+                </div>
+              )}
+
+              {extension.installed && (
+                <div className="mb-3 flex items-center gap-2 text-xs text-green-600">
+                  <span className="inline-block h-2 w-2 rounded-full bg-green-500" />
+                  Chrome拡張 v{extension.version} 接続済み
+                </div>
+              )}
+
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={collectAsinInput}
+                  onChange={(e) => { setCollectAsinInput(e.target.value); setCollectError(null) }}
+                  onKeyDown={(e) => { if (e.key === 'Enter') handleStartCollection() }}
+                  placeholder="ASIN（例: B0DEMO12345）またはAmazon商品URL"
+                  className="flex-1 rounded-lg border border-gray-300 px-4 py-2.5 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none"
+                  disabled={collecting}
+                />
+                <button
+                  onClick={handleStartCollection}
+                  disabled={collecting || !collectAsinInput.trim() || extension.installed === false}
+                  className="px-5 py-2.5 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+                >
+                  {collecting ? '収集中...' : '収集開始'}
+                </button>
+              </div>
+
+              {collectError && (
+                <p className="mt-2 text-sm text-red-600">{collectError}</p>
+              )}
+
+              <p className="mt-2 text-xs text-gray-400">
+                ASINを入力して「収集開始」をクリックすると、Chrome拡張がバックグラウンドでAmazonレビューを自動収集し、完了後にPOX分析を実行します。
+              </p>
+            </div>
+
+            {/* リアルタイム進捗パネル */}
+            {userInfo && (
+              <div className="mb-6">
+                <CollectionProgress
+                  userId={userInfo.user.id}
+                  onComplete={handleCollectionComplete}
+                  onStop={() => {
+                    setCollecting(false)
+                    extension.stopCollection()
+                  }}
+                />
+              </div>
+            )}
+
             <div className="bg-white rounded-xl border border-gray-200 p-6 mb-6">
               <div className="flex items-center justify-between mb-2">
                 <h2 className="text-lg font-semibold text-gray-900">収集済みレポート</h2>
@@ -1152,61 +1305,68 @@ function DashboardContent() {
         {activeTab === 'report' && report && (
           <div className="space-y-6">
             {/* Report Header */}
-            <div className="print-report-header bg-white rounded-xl border border-gray-200 p-6 break-inside-avoid">
-              <div className="mb-2">
-                <h2 className="print-section-title text-xl font-bold text-gray-900">{report.productName}</h2>
-              </div>
-              <div className="flex items-center justify-between gap-3">
-                <p className="print-subtle text-sm text-gray-500 font-mono">ASIN: {report.asin}</p>
-                <span className="print-subtle text-xs text-gray-400">
-                  {new Date(report.analyzedAt).toLocaleString('ja-JP')} / {report.totalReviewsAnalyzed}件分析
-                </span>
-              </div>
-              <div className="mt-4 flex flex-wrap items-center justify-end gap-2 print:hidden">
-                <button
-                  onClick={copyShareLink}
-                  className="inline-flex items-center rounded-full border border-blue-200 bg-white px-3 py-1.5 text-sm font-medium text-blue-700 hover:bg-blue-50 transition-colors"
-                >
-                  共有リンクをコピー
-                </button>
-                <button
-                  onClick={printReport}
-                  className="inline-flex items-center rounded-full border border-gray-200 bg-gray-50 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-100 transition-colors"
-                >
-                  印刷 / PDF保存
-                </button>
+            <div className="print-report-header bg-white rounded-xl border border-gray-200 overflow-hidden break-inside-avoid">
+              <div className="h-1.5 bg-gradient-to-r from-blue-500 via-indigo-500 to-purple-500" />
+              <div className="p-6">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <h2 className="print-section-title text-xl font-bold text-gray-900">{report.productName}</h2>
+                  <div className="mt-1 flex items-center gap-3">
+                    <p className="print-subtle text-sm text-gray-500 font-mono">ASIN: {report.asin}</p>
+                    <span className="print-subtle text-xs text-gray-400">
+                      {new Date(report.analyzedAt).toLocaleString('ja-JP')}
+                    </span>
+                  </div>
+                </div>
+                <div className="flex shrink-0 items-center gap-2 print:hidden">
+                  <button
+                    onClick={copyShareLink}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors shadow-sm"
+                  >
+                    <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M13.19 8.688a4.5 4.5 0 011.242 7.244l-4.5 4.5a4.5 4.5 0 01-6.364-6.364l1.757-1.757m9.86-2.44a4.5 4.5 0 00-1.242-7.244l-4.5-4.5a4.5 4.5 0 00-6.364 6.364L4.757 8.06" /></svg>
+                    共有
+                  </button>
+                  <button
+                    onClick={printReport}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors shadow-sm"
+                  >
+                    <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M6.72 13.829c-.24.03-.48.062-.72.096m.72-.096a42.415 42.415 0 0110.56 0m-10.56 0L6.34 18m10.94-4.171c.24.03.48.062.72.096m-.72-.096L17.66 18m0 0 .229 2.523a1.125 1.125 0 01-1.12 1.227H7.231c-.662 0-1.18-.568-1.12-1.227L6.34 18m11.318 0h1.091A2.25 2.25 0 0021 15.75V9.456c0-1.081-.768-2.015-1.837-2.175a48.055 48.055 0 00-1.913-.247M6.34 18H5.25A2.25 2.25 0 013 15.75V9.456c0-1.081.768-2.015 1.837-2.175a48.041 48.041 0 011.913-.247m10.5 0a48.536 48.536 0 00-10.5 0m10.5 0V3.375c0-.621-.504-1.125-1.125-1.125h-8.25c-.621 0-1.125.504-1.125 1.125v3.659M18.75 7.131H5.25" /></svg>
+                    PDF
+                  </button>
+                </div>
               </div>
               {shareMessage && (
                 <div className="mt-3 rounded-lg bg-blue-50 px-3 py-2 text-sm text-blue-700 print:hidden">
                   {shareMessage}
                 </div>
               )}
-              <div className="print-kpi-grid grid gap-3 md:grid-cols-4 mt-4">
-                <div className="rounded-lg border border-gray-100 bg-gray-50 p-4">
-                  <div className="text-xs text-gray-500 mb-1">販売価格</div>
-                  <div className="text-lg font-semibold text-gray-900">
-                    {currentReportProduct?.price ? `¥${currentReportProduct.price.toLocaleString()}` : '未取得'}
+              <div className="print-kpi-grid grid gap-3 md:grid-cols-4 mt-5">
+                <div className="rounded-xl border border-gray-100 bg-gradient-to-b from-white to-gray-50 p-4 shadow-sm">
+                  <div className="text-xs font-medium text-gray-400 mb-2">販売価格</div>
+                  <div className="text-2xl font-bold text-gray-900">
+                    {currentReportProduct?.price ? `¥${currentReportProduct.price.toLocaleString()}` : '—'}
                   </div>
                 </div>
-                <div className="rounded-lg border border-gray-100 bg-gray-50 p-4">
-                  <div className="text-xs text-gray-500 mb-1">総評価数（星のみ含む）</div>
-                  <div className="text-lg font-semibold text-gray-900">
-                    {totalRatingsCount > 0 ? `${totalRatingsCount}件` : '不明'}
+                <div className="rounded-xl border border-gray-100 bg-gradient-to-b from-white to-gray-50 p-4 shadow-sm">
+                  <div className="text-xs font-medium text-gray-400 mb-2">総評価数</div>
+                  <div className="text-2xl font-bold text-gray-900">
+                    {totalRatingsCount > 0 ? totalRatingsCount.toLocaleString() : '—'}
+                  </div>
+                  <div className="text-xs text-gray-400 mt-0.5">星のみの評価を含む</div>
+                </div>
+                <div className="rounded-xl border border-gray-100 bg-gradient-to-b from-white to-gray-50 p-4 shadow-sm">
+                  <div className="text-xs font-medium text-gray-400 mb-2">レビュー一覧</div>
+                  <div className="text-2xl font-bold text-gray-900">
+                    {reviewListCount > 0 ? reviewListCount.toLocaleString() : '—'}
                   </div>
                 </div>
-                <div className="rounded-lg border border-gray-100 bg-gray-50 p-4">
-                  <div className="text-xs text-gray-500 mb-1">レビュー一覧件数</div>
-                  <div className="text-lg font-semibold text-gray-900">
-                    {reviewListCount > 0 ? `${reviewListCount}件` : '未取得'}
-                  </div>
-                </div>
-                <div className="rounded-lg border border-gray-100 bg-gray-50 p-4">
-                  <div className="text-xs text-gray-500 mb-1">今回分析したレビュー</div>
-                  <div className="text-lg font-semibold text-gray-900">
-                    {report.totalReviewsAnalyzed}件
+                <div className="rounded-xl border border-blue-100 bg-gradient-to-b from-blue-50 to-white p-4 shadow-sm">
+                  <div className="text-xs font-medium text-blue-500 mb-2">分析対象</div>
+                  <div className="text-2xl font-bold text-blue-700">
+                    {report.totalReviewsAnalyzed.toLocaleString()}
                   </div>
                   {reviewCoverageRate && (
-                    <div className="mt-1 text-xs text-gray-500">一覧に対して {reviewCoverageRate}% を分析</div>
+                    <div className="mt-0.5 text-xs text-blue-400">カバー率 {reviewCoverageRate}%</div>
                   )}
                 </div>
               </div>
@@ -1273,6 +1433,7 @@ function DashboardContent() {
                     </div>
                   )}
                 </div>
+              </div>
               </div>
             </div>
 
@@ -1349,10 +1510,17 @@ function DashboardContent() {
             </div>
 
             {/* Category Breakdown */}
-            <div className="print-section-card print-pox-section bg-white rounded-xl border border-gray-200 p-6 break-inside-avoid">
+            <div className="print-section-card print-pox-section bg-white rounded-xl border border-gray-200 overflow-hidden break-inside-avoid">
+              <div className="h-1 bg-gradient-to-r from-cyan-400 via-blue-500 to-indigo-500" />
+              <div className="p-6">
               <div className="mb-4">
                 <div className="flex items-start justify-between gap-4">
-                  <h3 className="text-lg font-semibold text-gray-900">レビュー構造化分析</h3>
+                  <div className="flex items-center gap-2">
+                    <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-blue-100 text-blue-600">
+                      <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6A2.25 2.25 0 016 3.75h2.25A2.25 2.25 0 0110.5 6v2.25a2.25 2.25 0 01-2.25 2.25H6a2.25 2.25 0 01-2.25-2.25V6zM3.75 15.75A2.25 2.25 0 016 13.5h2.25a2.25 2.25 0 012.25 2.25V18a2.25 2.25 0 01-2.25 2.25H6A2.25 2.25 0 013.75 18v-2.25zM13.5 6a2.25 2.25 0 012.25-2.25H18A2.25 2.25 0 0120.25 6v2.25A2.25 2.25 0 0118 10.5h-2.25a2.25 2.25 0 01-2.25-2.25V6zM13.5 15.75a2.25 2.25 0 012.25-2.25H18a2.25 2.25 0 012.25 2.25V18A2.25 2.25 0 0118 20.25h-2.25A2.25 2.25 0 0113.5 18v-2.25z" /></svg>
+                    </span>
+                    <h3 className="text-lg font-semibold text-gray-900">レビュー構造化分析</h3>
+                  </div>
                   <div className="flex shrink-0 items-center gap-2">
                     {editingCategories && (
                       <select
@@ -1506,12 +1674,20 @@ function DashboardContent() {
                   })()}
               </div>
             </div>
+            </div>
 
             {/* POX Analysis */}
-            <div className="print-section-card bg-white rounded-xl border border-gray-200 p-6 break-inside-avoid">
+            <div className="print-section-card bg-white rounded-xl border border-gray-200 overflow-hidden break-inside-avoid">
+              <div className="h-1 bg-gradient-to-r from-blue-500 via-slate-400 to-amber-500" />
+              <div className="p-6">
               <div className="mb-4">
                 <div className="flex items-start justify-between gap-4">
-                  <h3 className="text-lg font-semibold text-gray-900">POX分析</h3>
+                  <div className="flex items-center gap-2">
+                    <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-indigo-100 text-indigo-600">
+                      <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M3.75 3v11.25A2.25 2.25 0 006 16.5h2.25M3.75 3h-1.5m1.5 0h16.5m0 0h1.5m-1.5 0v11.25A2.25 2.25 0 0118 16.5h-2.25m-7.5 0h7.5m-7.5 0l-1 3m8.5-3l1 3m0 0l.5 1.5m-.5-1.5h-9.5m0 0l-.5 1.5" /></svg>
+                    </span>
+                    <h3 className="text-lg font-semibold text-gray-900">POX分析</h3>
+                  </div>
                   <button
                     onClick={() => setEditingPoxGuidance((prev) => !prev)}
                     className="shrink-0 whitespace-nowrap rounded-lg bg-blue-50 px-3 py-1.5 text-sm font-medium text-blue-700 hover:bg-blue-100 transition-colors"
@@ -1548,62 +1724,70 @@ function DashboardContent() {
                   </div>
                 </div>
               )}
-              <div className="space-y-6">
+              <div className="space-y-5">
                 {/* POD */}
-                <div className="print-pox-group">
-                  <div className="mb-3">
-                    <div className="flex items-center gap-2">
-                      <span className="px-2 py-1 bg-blue-600 text-white text-xs font-bold rounded">POD</span>
-                      <span className="text-sm font-medium text-gray-700">Point of Difference - 独自優位性候補</span>
+                <div className="print-pox-group rounded-xl border border-blue-200 bg-gradient-to-br from-blue-50 to-white p-5">
+                  <div className="mb-4 flex items-center gap-3">
+                    <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-blue-600 text-white text-sm font-bold shadow-sm">D</span>
+                    <div>
+                      <div className="text-sm font-semibold text-blue-900">Point of Difference</div>
+                      <div className="text-xs text-blue-600/70">独自優位性候補 — 開発リソースを集中させる</div>
                     </div>
-                    <p className="mt-1 ml-10 text-xs text-gray-400">競合の不満を解決できれば差別化になる要素。ここに開発リソースを集中させる</p>
                   </div>
                   <div className="space-y-3">
                     {report.poxAnalysis.pod.map((item, i) => (
-                      <PoxItemCard key={i} item={item} borderColor="border-blue-300" reviews={fetchedReviews} />
+                      <PoxItemCard key={i} item={item} borderColor="border-blue-400" reviews={fetchedReviews} />
                     ))}
                   </div>
                 </div>
 
                 {/* POP */}
-                <div className="print-pox-group">
-                  <div className="mb-3">
-                    <div className="flex items-center gap-2">
-                      <span className="px-2 py-1 bg-gray-600 text-white text-xs font-bold rounded">POP</span>
-                      <span className="text-sm font-medium text-gray-700">Point of Parity - カテゴリ必須機能</span>
+                <div className="print-pox-group rounded-xl border border-slate-200 bg-gradient-to-br from-slate-50 to-white p-5">
+                  <div className="mb-4 flex items-center gap-3">
+                    <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-slate-600 text-white text-sm font-bold shadow-sm">P</span>
+                    <div>
+                      <div className="text-sm font-semibold text-slate-900">Point of Parity</div>
+                      <div className="text-xs text-slate-500">カテゴリ必須機能 — 欠けると即離脱される</div>
                     </div>
-                    <p className="mt-1 ml-10 text-xs text-gray-400">このカテゴリで当然あるべき機能。欠けると即離脱されるため確実に押さえる</p>
                   </div>
                   <div className="space-y-3">
                     {report.poxAnalysis.pop.map((item, i) => (
-                      <PoxItemCard key={i} item={item} borderColor="border-gray-300" reviews={fetchedReviews} />
+                      <PoxItemCard key={i} item={item} borderColor="border-slate-300" reviews={fetchedReviews} />
                     ))}
                   </div>
                 </div>
 
                 {/* POF */}
-                <div className="print-pox-group">
-                  <div className="mb-3">
-                    <div className="flex items-center gap-2">
-                      <span className="px-2 py-1 bg-orange-500 text-white text-xs font-bold rounded">POF</span>
-                      <span className="text-sm font-medium text-gray-700">Point of Failure - 戦略的妥協候補</span>
+                <div className="print-pox-group rounded-xl border border-amber-200 bg-gradient-to-br from-amber-50 to-white p-5">
+                  <div className="mb-4 flex items-center gap-3">
+                    <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-amber-500 text-white text-sm font-bold shadow-sm">F</span>
+                    <div>
+                      <div className="text-sm font-semibold text-amber-900">Point of Failure</div>
+                      <div className="text-xs text-amber-600/70">戦略的妥協候補 — コストカットや仕様簡素化の判断材料</div>
                     </div>
-                    <p className="mt-1 ml-10 text-xs text-gray-400">顧客がそこまで重視していない要素。コストカットや仕様簡素化の判断材料になる</p>
                   </div>
                   <div className="space-y-3">
                     {report.poxAnalysis.pof.map((item, i) => (
-                      <PoxItemCard key={i} item={item} borderColor="border-orange-300" reviews={fetchedReviews} />
+                      <PoxItemCard key={i} item={item} borderColor="border-amber-300" reviews={fetchedReviews} />
                     ))}
                   </div>
                 </div>
               </div>
             </div>
+            </div>
 
               {/* 商品改善のヒント - 全幅 */}
-              <div className="print-section-card bg-white rounded-xl border border-gray-200 p-6 break-inside-avoid">
-                <h3 className="text-lg font-semibold text-gray-900">商品改善のヒント</h3>
+              <div className="print-section-card bg-white rounded-xl border border-gray-200 overflow-hidden break-inside-avoid">
+                <div className="h-1 bg-gradient-to-r from-teal-400 to-cyan-500" />
+                <div className="p-6">
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-teal-100 text-teal-600">
+                    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M12 18v-5.25m0 0a6.01 6.01 0 001.5-.189m-1.5.189a6.01 6.01 0 01-1.5-.189m3.75 7.478a12.06 12.06 0 01-4.5 0m3.75 2.383a14.406 14.406 0 01-3 0M14.25 18v-.192c0-.983.658-1.823 1.508-2.316a7.5 7.5 0 10-7.517 0c.85.493 1.509 1.333 1.509 2.316V18" /></svg>
+                  </span>
+                  <h3 className="text-lg font-semibold text-gray-900">商品改善のヒント</h3>
+                </div>
                 <p className="mb-4 text-xs text-gray-500">
-                  「〜があれば」「〜だったら」というレビュー中の要望から、改善につながる顧客の声を抽出しています。商品開発や機能追加の優先度付けに活用できます。
+                  「〜があれば」「〜だったら」というレビュー中の要望を抽出。商品開発や機能追加の優先度付けに活用できます。
                 </p>
                 <div className="grid md:grid-cols-2 gap-4">
                   {normalizeUnmetNeeds(report.unmetNeeds).map((item, i) => (
@@ -1621,14 +1805,20 @@ function DashboardContent() {
                   ))}
                 </div>
               </div>
+              </div>
 
               {/* 満足・不満・価格 3列 */}
-              <div className="grid md:grid-cols-3 gap-6">
+              <div className="grid md:grid-cols-3 gap-5">
               {/* Satisfaction Points */}
-              <div className="print-section-card bg-white rounded-xl border border-gray-200 p-6 break-inside-avoid">
-                <h3 className="text-base font-semibold text-gray-900">満足 TOP5</h3>
+              <div className="print-section-card rounded-xl border border-emerald-200 overflow-hidden break-inside-avoid">
+                <div className="h-1 bg-gradient-to-r from-emerald-400 to-green-500" />
+                <div className="p-5 bg-gradient-to-b from-emerald-50/50 to-white">
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="flex h-6 w-6 items-center justify-center rounded-md bg-emerald-100 text-emerald-600 text-xs font-bold">+</span>
+                  <h3 className="text-base font-semibold text-gray-900">満足 TOP5</h3>
+                </div>
                 <p className="mb-3 text-xs text-gray-500">
-                  高評価レビューで繰り返し出た満足テーマです。
+                  高評価レビューで繰り返し出た満足テーマ
                 </p>
                 {displaySatisfactionPoints.length > 0 ? (
                   <div className="space-y-2">
@@ -1671,12 +1861,18 @@ function DashboardContent() {
                   </div>
                 )}
               </div>
+              </div>
 
               {/* Pain Points */}
-              <div className="print-section-card bg-white rounded-xl border border-gray-200 p-6 break-inside-avoid">
-                <h3 className="text-base font-semibold text-gray-900">不満 TOP5</h3>
+              <div className="print-section-card rounded-xl border border-red-200 overflow-hidden break-inside-avoid">
+                <div className="h-1 bg-gradient-to-r from-red-400 to-rose-500" />
+                <div className="p-5 bg-gradient-to-b from-red-50/50 to-white">
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="flex h-6 w-6 items-center justify-center rounded-md bg-red-100 text-red-600 text-xs font-bold">-</span>
+                  <h3 className="text-base font-semibold text-gray-900">不満 TOP5</h3>
+                </div>
                 <p className="mb-3 text-xs text-gray-500">
-                  低評価レビューで繰り返し出た不満テーマです。
+                  低評価レビューで繰り返し出た不満テーマ
                 </p>
                 {displayPainPoints.length > 0 ? (
                   <div className="space-y-2">
@@ -1724,61 +1920,75 @@ function DashboardContent() {
                   </div>
                 )}
               </div>
+              </div>
 
               {/* Price Sentiment */}
-              <div className="bg-white rounded-xl border border-gray-200 p-6 break-inside-avoid">
-                <h3 className="text-base font-semibold text-gray-900">価格に対する印象</h3>
-                <p className="mb-3 text-xs text-gray-500">
-                  価格に触れているレビューを3方向に整理した目安です。
+              <div className="rounded-xl border border-violet-200 overflow-hidden break-inside-avoid">
+                <div className="h-1 bg-gradient-to-r from-violet-400 to-purple-500" />
+                <div className="p-5 bg-gradient-to-b from-violet-50/50 to-white">
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="flex h-6 w-6 items-center justify-center rounded-md bg-violet-100 text-violet-600 text-xs font-bold">¥</span>
+                  <h3 className="text-base font-semibold text-gray-900">価格印象</h3>
+                </div>
+                <p className="mb-4 text-xs text-gray-500">
+                  価格に触れたレビューの印象分布
                 </p>
-                <div className="space-y-3">
+                <div className="space-y-4">
                   <div>
-                    <div className="flex justify-between text-sm mb-1">
-                      <span className="text-red-600">割高に感じる</span>
-                      <span className="font-medium">{report.priceSentiment.expensive}%</span>
+                    <div className="flex justify-between text-sm mb-1.5">
+                      <span className="font-medium text-red-600">割高に感じる</span>
+                      <span className="font-bold text-red-600">{report.priceSentiment.expensive}%</span>
                     </div>
-                    <div className="w-full bg-gray-100 rounded-full h-2">
-                      <div className="bg-red-400 h-2 rounded-full" style={{ width: `${report.priceSentiment.expensive}%` }} />
+                    <div className="w-full bg-gray-100 rounded-full h-2.5">
+                      <div className="bg-gradient-to-r from-red-400 to-red-500 h-2.5 rounded-full transition-all" style={{ width: `${report.priceSentiment.expensive}%` }} />
                     </div>
                   </div>
                   <div>
-                    <div className="flex justify-between text-sm mb-1">
-                      <span className="text-yellow-600">おおむね妥当</span>
-                      <span className="font-medium">{report.priceSentiment.reasonable}%</span>
+                    <div className="flex justify-between text-sm mb-1.5">
+                      <span className="font-medium text-amber-600">おおむね妥当</span>
+                      <span className="font-bold text-amber-600">{report.priceSentiment.reasonable}%</span>
                     </div>
-                    <div className="w-full bg-gray-100 rounded-full h-2">
-                      <div className="bg-yellow-400 h-2 rounded-full" style={{ width: `${report.priceSentiment.reasonable}%` }} />
+                    <div className="w-full bg-gray-100 rounded-full h-2.5">
+                      <div className="bg-gradient-to-r from-amber-400 to-yellow-400 h-2.5 rounded-full transition-all" style={{ width: `${report.priceSentiment.reasonable}%` }} />
                     </div>
                   </div>
                   <div>
-                    <div className="flex justify-between text-sm mb-1">
-                      <span className="text-green-600">コスパが良い</span>
-                      <span className="font-medium">{report.priceSentiment.goodValue}%</span>
+                    <div className="flex justify-between text-sm mb-1.5">
+                      <span className="font-medium text-emerald-600">コスパが良い</span>
+                      <span className="font-bold text-emerald-600">{report.priceSentiment.goodValue}%</span>
                     </div>
-                    <div className="w-full bg-gray-100 rounded-full h-2">
-                      <div className="bg-green-400 h-2 rounded-full" style={{ width: `${report.priceSentiment.goodValue}%` }} />
+                    <div className="w-full bg-gray-100 rounded-full h-2.5">
+                      <div className="bg-gradient-to-r from-emerald-400 to-green-500 h-2.5 rounded-full transition-all" style={{ width: `${report.priceSentiment.goodValue}%` }} />
                     </div>
                   </div>
                 </div>
               </div>
+              </div>
             </div>
 
             {/* Action Recommendations */}
-            <div className="print-section-card bg-white rounded-xl border border-gray-200 p-6 break-inside-avoid">
-              <h3 className="text-lg font-semibold text-gray-900">レビューから導く改善施策</h3>
+            <div className="print-section-card bg-white rounded-xl border border-gray-200 overflow-hidden break-inside-avoid">
+              <div className="h-1 bg-gradient-to-r from-orange-400 to-rose-500" />
+              <div className="p-6">
+              <div className="flex items-center gap-2 mb-1">
+                <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-orange-100 text-orange-600">
+                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z" /></svg>
+                </span>
+                <h3 className="text-lg font-semibold text-gray-900">改善施策</h3>
+              </div>
               <p className="mb-4 text-xs text-gray-500">
-                分析結果をもとに、商品ページ・商品設計・訴求の観点から具体的な改善施策を提案しています。
+                商品ページ・商品設計・訴求の観点から具体的な改善施策を提案
               </p>
               <div className="space-y-3">
                 {normalizeActions(report.actionRecommendations).slice(0, 3).map((item, i) => (
-                  <div key={i} className="flex gap-3 items-start rounded-lg border border-gray-100 bg-gray-50 px-4 py-3">
-                    <span className="flex-shrink-0 mt-0.5 w-6 h-6 bg-blue-100 text-blue-700 text-xs font-bold rounded-full flex items-center justify-center">
+                  <div key={i} className="flex gap-3 items-start rounded-xl border border-gray-100 bg-gradient-to-r from-gray-50 to-white px-4 py-4 shadow-sm">
+                    <span className="flex-shrink-0 mt-0.5 w-7 h-7 bg-gradient-to-br from-orange-400 to-rose-500 text-white text-xs font-bold rounded-lg flex items-center justify-center shadow-sm">
                       {i + 1}
                     </span>
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
                         {item.category && item.category !== '改善施策' && (
-                          <span className="shrink-0 whitespace-nowrap rounded bg-blue-50 px-1.5 py-0.5 text-xs font-medium text-blue-700">{item.category}</span>
+                          <span className="shrink-0 whitespace-nowrap rounded-md bg-orange-50 border border-orange-200 px-1.5 py-0.5 text-xs font-medium text-orange-700">{item.category}</span>
                         )}
                         <p className="text-sm font-medium text-gray-900">{item.action}</p>
                       </div>
@@ -1788,6 +1998,7 @@ function DashboardContent() {
                     </div>
                   </div>
                 ))}
+              </div>
               </div>
             </div>
 
