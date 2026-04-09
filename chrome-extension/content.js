@@ -548,20 +548,23 @@
   }
 
   function getEstimatedTotalPages(state, currentPageReviewCount = 10) {
+    // filterReviewCounts ベースの推定を優先（より信頼性が高い）
+    const reviewCountBase = state?.phase && state.phase !== 'all'
+      ? (state?.filterReviewCounts?.[state.phase] || 0)
+      : (state?.textReviewCount || state?.productInfo?.totalReviews || 0);
+
+    if (reviewCountBase > 0) {
+      const pageSize = Math.max(currentPageReviewCount || 0, 10);
+      return Math.max(1, Math.ceil(reviewCountBase / pageSize));
+    }
+
+    // フォールバック: ページネーション DOM から取得
     const paginationTotalPages = getPaginationTotalPages();
     if (paginationTotalPages) {
       return paginationTotalPages;
     }
 
-    const reviewCountBase = state?.phase && state.phase !== 'all'
-      ? (state?.filterReviewCounts?.[state.phase] || 0)
-      : (state?.textReviewCount || state?.productInfo?.totalReviews || 0);
-    if (!reviewCountBase) {
-      return null;
-    }
-
-    const pageSize = Math.max(currentPageReviewCount || 0, 10);
-    return Math.max(1, Math.ceil(reviewCountBase / pageSize));
+    return null;
   }
 
   function getCollectionPageLimit(state, currentPageReviewCount = 10) {
@@ -819,7 +822,9 @@
     const nextPageNum = (state.currentPage || 1) + 1;
     const nextUrl = buildReviewPageUrl(asin, nextPageNum, state.phase);
     const zeroNewPageLimit = ZERO_NEW_PAGE_LIMIT_SUPPLEMENTAL;
-    const shouldContinuePaging = hasNextPage
+    // ページネーションボタンが無くても、件数的にまだページがあるならURL直接遷移で続行
+    const hasMoreByCount = nextPageNum <= maxPages && addedCount > 0;
+    const shouldContinuePaging = (hasNextPage || hasMoreByCount)
       && nextPageNum <= maxPages
       && state.zeroNewPages < zeroNewPageLimit;
 
@@ -840,7 +845,7 @@
     reportProgressToServer(state);
 
     console.log(
-      `[ReviewAI] Pagination check: hasNext=${hasNextPage}, nextPage=${nextPageNum}, maxPages=${maxPages}, addedCount=${addedCount}, zeroNewPages=${state.zeroNewPages}, zeroNewLimit=${zeroNewPageLimit}, target=${state.targetReviewCount || 0}`
+      `[ReviewAI] Pagination check: hasNext=${hasNextPage}, hasMoreByCount=${hasMoreByCount}, nextPage=${nextPageNum}, maxPages=${maxPages}, addedCount=${addedCount}, zeroNewPages=${state.zeroNewPages}, zeroNewLimit=${zeroNewPageLimit}, target=${state.targetReviewCount || 0}`
     );
 
     if (shouldContinuePaging) {

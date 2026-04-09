@@ -673,18 +673,6 @@ function DashboardContent() {
     star,
     percent: totalRatingsCount > 0 ? Math.round(((ratingBreakdown[star] || 0) / totalRatingsCount) * 100) : 0,
   }))
-  const negativeRate = ratingDistribution
-    .filter((item) => item.star <= 3)
-    .reduce((sum, item) => sum + item.percent, 0)
-  const ratingSummary = totalRatingsCount > 0 && hasRatingDistribution
-    ? (
-      ratingDistribution[0].percent >= 50 && negativeRate < 30
-        ? '高評価が過半で、全体としては好意的に受け止められています。'
-        : negativeRate >= 35
-          ? '高評価だけでなく低評価も一定数あり、評価はやや割れています。'
-          : '高評価が優勢ですが、一部に不満もあり評価は中程度に安定しています。'
-    )
-    : '評価分布データが不足しています。'
   const displayPainPoints = report
     ? report.painPoints
       .map((pain) => ({ ...pain, displayTitle: getDisplayTopicLabel(pain.title) }))
@@ -1135,7 +1123,38 @@ function DashboardContent() {
         )}
 
         {activeTab === 'products' && (
-          <>
+          <div className="grid grid-cols-1 lg:grid-cols-[280px_1fr] gap-6">
+            {/* 使い方ガイド */}
+            <aside className="print:hidden">
+              <div className="bg-white rounded-xl border border-gray-200 p-5 sticky top-8">
+                <h3 className="text-sm font-semibold text-gray-900 mb-3">使い方</h3>
+                <ol className="space-y-3 text-xs text-gray-600">
+                  <li className="flex gap-2">
+                    <span className="flex-shrink-0 w-5 h-5 rounded-full bg-blue-100 text-blue-700 text-[11px] font-bold flex items-center justify-center">1</span>
+                    <span>Chrome拡張をインストールし、Amazonの商品ページを開く</span>
+                  </li>
+                  <li className="flex gap-2">
+                    <span className="flex-shrink-0 w-5 h-5 rounded-full bg-blue-100 text-blue-700 text-[11px] font-bold flex items-center justify-center">2</span>
+                    <span>拡張機能のポップアップから「レビューを取得する」をクリック</span>
+                  </li>
+                  <li className="flex gap-2">
+                    <span className="flex-shrink-0 w-5 h-5 rounded-full bg-blue-100 text-blue-700 text-[11px] font-bold flex items-center justify-center">3</span>
+                    <span>取得完了後、自動でPOX分析が実行される</span>
+                  </li>
+                  <li className="flex gap-2">
+                    <span className="flex-shrink-0 w-5 h-5 rounded-full bg-blue-100 text-blue-700 text-[11px] font-bold flex items-center justify-center">4</span>
+                    <span>このダッシュボードに分析レポートが表示される</span>
+                  </li>
+                </ol>
+                <div className="mt-4 pt-3 border-t border-gray-100 text-[11px] text-gray-400 space-y-1">
+                  <p>各★評価ごとに最大100件ずつ取得（合計最大500件）</p>
+                  <p>複数商品の比較分析も可能</p>
+                </div>
+              </div>
+            </aside>
+
+            {/* メインコンテンツ */}
+            <div>
             {/* レビュー収集 & 分析 */}
             <div className="bg-white rounded-xl border border-gray-200 p-6 mb-6">
               <h2 className="text-lg font-semibold text-gray-900 mb-3">レビュー収集 & 分析</h2>
@@ -1299,7 +1318,8 @@ function DashboardContent() {
                 </div>
               )}
             </div>
-          </>
+            </div>
+          </div>
         )}
 
         {activeTab === 'report' && report && (
@@ -1371,9 +1391,9 @@ function DashboardContent() {
                 </div>
               </div>
               <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-                <div className="font-medium">取得上限の注意</div>
+                <div className="font-medium">レビュー取得について</div>
                 <p className="mt-1">
-                  Amazon の仕様上、各星評価フィルタごとに最大約 100 件を上限として収集しています。分析はその範囲で取得できたレビューに基づいています。
+                  Amazonの仕様により、★1〜★5の各星評価ごとに最大100件ずつ取得できます（合計最大500件）。レビュー総数がそれ以上の場合でも、取得した範囲内で分析を行っています。
                 </p>
                 {starCoverageRows.some(({ key }) => (starFetchStats[key]?.available || 0) > 0) && (
                   <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
@@ -1403,9 +1423,6 @@ function DashboardContent() {
                     {'★'.repeat(Math.round(averageRating || 0))}
                     <span className="ml-2 text-gray-500">{totalRatingsCount > 0 ? `${totalRatingsCount}件の評価` : '評価件数不明'}</span>
                   </div>
-                  <p className="mt-3 text-xs text-gray-500">
-                    {ratingSummary}
-                  </p>
                 </div>
                 <div className="rounded-xl border border-gray-100 bg-white p-4">
                   <div className="mb-3 flex items-center justify-between">
@@ -1556,19 +1573,15 @@ function DashboardContent() {
                 </div>
               </div>
               <div className="mb-6 rounded-xl border border-gray-100 bg-gradient-to-br from-slate-50 to-white p-4">
-                <div className="mb-3 flex items-center justify-between">
-                  <div>
-                    <h4 className="text-sm font-semibold text-gray-900">レビュー論点の分布</h4>
-                    <p className="text-xs text-gray-500">どの観点に言及が集まっているかを比較</p>
-                    <p className="mt-1 text-[11px] text-gray-400">
-                      言及割合 = 分析対象レビューのうち、この観点に触れているレビューの割合
-                    </p>
-                  </div>
-                  <span className="text-xs text-gray-400">言及割合</span>
+                <div className="mb-3">
+                  <h4 className="text-sm font-semibold text-gray-900">レビュー論点の分布</h4>
+                  <p className="text-xs text-gray-500">全レビューのうち、各観点に触れているレビューの割合（例: 71% = 全{report.totalReviewsAnalyzed}件中 約{Math.round(report.totalReviewsAnalyzed * 0.71)}件が言及）</p>
                 </div>
                 <div className="space-y-3">
-                  {report.categoryBreakdown.map((cat, i) => (
-                    <div key={`chart-${i}`} className="grid grid-cols-[minmax(0,180px)_1fr_56px] items-center gap-3">
+                  {report.categoryBreakdown.map((cat, i) => {
+                    const mentionCount = Math.round(report.totalReviewsAnalyzed * cat.mentionRate / 100)
+                    return (
+                    <div key={`chart-${i}`} className="grid grid-cols-[minmax(0,180px)_1fr_80px] items-center gap-3">
                       <div className="truncate text-sm font-medium text-gray-700">{cat.category}</div>
                       <div className="relative h-4 overflow-hidden rounded-full bg-gray-100">
                         <div
@@ -1576,9 +1589,13 @@ function DashboardContent() {
                           style={{ width: `${cat.mentionRate}%` }}
                         />
                       </div>
-                      <div className="text-right text-sm font-semibold text-blue-600">{cat.mentionRate}%</div>
+                      <div className="text-right text-xs">
+                        <span className="font-semibold text-blue-600">{cat.mentionRate}%</span>
+                        <span className="text-gray-400 ml-1">({mentionCount}件)</span>
+                      </div>
                     </div>
-                  ))}
+                    )
+                  })}
                 </div>
               </div>
               <div className="grid md:grid-cols-2 gap-4">
@@ -1731,7 +1748,7 @@ function DashboardContent() {
                     <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-blue-600 text-white text-sm font-bold shadow-sm">D</span>
                     <div>
                       <div className="text-sm font-semibold text-blue-900">Point of Difference</div>
-                      <div className="text-xs text-blue-600/70">独自優位性候補 — 開発リソースを集中させる</div>
+                      <div className="text-xs text-blue-600/70">他社と差別化できるポイント — ここを強化すると選ばれる理由になる</div>
                     </div>
                   </div>
                   <div className="space-y-3">
@@ -1747,7 +1764,7 @@ function DashboardContent() {
                     <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-slate-600 text-white text-sm font-bold shadow-sm">P</span>
                     <div>
                       <div className="text-sm font-semibold text-slate-900">Point of Parity</div>
-                      <div className="text-xs text-slate-500">カテゴリ必須機能 — 欠けると即離脱される</div>
+                      <div className="text-xs text-slate-500">あって当然と思われる機能 — 無いと不満・低評価に直結する</div>
                     </div>
                   </div>
                   <div className="space-y-3">
@@ -1763,7 +1780,7 @@ function DashboardContent() {
                     <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-amber-500 text-white text-sm font-bold shadow-sm">F</span>
                     <div>
                       <div className="text-sm font-semibold text-amber-900">Point of Failure</div>
-                      <div className="text-xs text-amber-600/70">戦略的妥協候補 — コストカットや仕様簡素化の判断材料</div>
+                      <div className="text-xs text-amber-600/70">改善しても評価が上がりにくい点 — 割り切ってコストを抑える判断材料</div>
                     </div>
                   </div>
                   <div className="space-y-3">
