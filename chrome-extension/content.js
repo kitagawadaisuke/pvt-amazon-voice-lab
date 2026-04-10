@@ -251,12 +251,13 @@
     return parser.parseFromString(html, 'text/html');
   }
 
-  // 全レビューを HTML ページ GET で順番に取得（最大 60 ページ = 600 件）
-  async function fetchAllReviews(asin, onPage) {
+  // 全レビューを HTML ページ GET で順番に取得
+  // startPage: ページ1はDOM取得済みのため通常は2から開始（最大 60 ページ = 600 件）
+  async function fetchAllReviews(asin, onPage, startPage = 2) {
     const collected = [];
     const MAX_PAGES = 60;
 
-    for (let pageNumber = 1; pageNumber <= MAX_PAGES; pageNumber++) {
+    for (let pageNumber = startPage; pageNumber <= MAX_PAGES; pageNumber++) {
       let doc;
       try {
         doc = await fetchReviewPageHtml(asin, pageNumber);
@@ -266,21 +267,17 @@
       }
 
       const pageReviews = extractReviewsFromContainer(doc.body);
-      console.log(`[ReviewAI] page ${pageNumber}: extracted ${pageReviews.length} reviews (total ${collected.length + pageReviews.length})`);
+      console.log(`[ReviewAI] page ${pageNumber}: extracted ${pageReviews.length} reviews`);
 
-      if (pageReviews.length === 0) break;
+      if (pageReviews.length === 0) {
+        console.log(`[ReviewAI] No reviews on page ${pageNumber}. Done.`);
+        break;
+      }
 
       collected.push(...pageReviews);
 
       if (typeof onPage === 'function') {
         await onPage({ pageNumber, pageReviews, total: collected.length });
-      }
-
-      // 次ページリンクがなければ終了
-      const nextLink = doc.querySelector('.a-pagination .a-last:not(.a-disabled) a');
-      if (!nextLink) {
-        console.log(`[ReviewAI] No next page link after page ${pageNumber}. Done.`);
-        break;
       }
 
       await new Promise((resolve) => setTimeout(resolve, 1200 + Math.random() * 800));
