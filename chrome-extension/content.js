@@ -1,6 +1,6 @@
 // Amazon Voice Lab Content Script
-// Amazon商品ページ・レビューページからレビューを AJAX 経由で自動取得する
-// 方式: Amazon 内部 AJAX エンドポイントを直接叩いてページ遷移なしで全レビューを収集
+// Amazon商品ページ・レビューページからレビューを自動取得する
+// 方式: レビューページ HTML を fetch で直接取得してページネーション
 
 (function () {
   'use strict';
@@ -234,200 +234,56 @@
     return url.toString();
   }
 
-  // SellerSprite 拡張と同じ手法で Amazon の内部 AJAX エンドポイントを直接叩く
-  // レスポンスは &&& 区切りの JSON 配列群
-  // Amazon のエンドポイントには複数バリアントがあるため、成功したものを記憶する
-  const AMAZON_AJAX_PATHS = [
-    '/hz/reviews-render/ajax/reviews/get',
-    '/portal/customer-reviews/ajax/reviews/get',
-  ];
-  let cachedWorkingAjaxPath = null;
-
-  function buildAjaxParams(asin, filterByStar, pageNumber, nextPageToken, refTag) {
-    const params = new URLSearchParams();
-    params.append('sortBy', 'recent');
-    params.append('reviewerType', 'all_reviews');
-    params.append('formatType', '');
-    params.append('mediaType', '');
-    params.append('filterByStar', filterByStar && filterByStar !== 'all' ? filterByStar : '');
-    params.append('filterByAge', '');
-    params.append('pageNumber', String(pageNumber));
-    params.append('filterByLanguage', '');
-    params.append('filterByKeyword', '');
-    params.append('shouldAppend', 'undefined');
-    params.append('deviceType', 'desktop');
-    params.append('canShowIntHeader', 'undefined');
-    params.append('reviewsShown', String((pageNumber - 1) * 10));
-    params.append('reftag', refTag);
-    params.append('pageSize', '10');
-    params.append('asin', asin);
-    params.append('scope', `reviewsAjax${pageNumber - 1}`);
-    if (pageNumber > 1 && nextPageToken) {
-      params.append('nextPageToken', nextPageToken);
-    }
-    return params;
-  }
-
-  async function tryAjaxCall(host, path, refTag, params) {
-    const url = `https://${host}${path}/ref=${refTag}`;
+  // レビューページ HTML を直接 GET してパース
+  // AJAX エンドポイント（403 問題あり）の代わりに使用する
+  async function fetchReviewPageHtml(asin, pageNumber) {
+    const url = buildReviewPageUrl(asin, pageNumber, null);
     const response = await fetch(url, {
-      method: 'POST',
       credentials: 'include',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
-        'Accept': 'text/html,*/*',
-        'X-Requested-With': 'XMLHttpRequest',
-      },
-      body: params.toString(),
+      headers: { 'Accept': 'text/html' },
     });
-    return { response, url };
-  }
-
-  async function fetchReviewPageAjax(asin, filterByStar, pageNumber, nextPageToken) {
-    const host = window.location.hostname;
-    const refTag = pageNumber === 1 ? 'cm_cr_arp_d_viewopt_sr' : 'cm_cr_getr_d_paging_btm';
-    const params = buildAjaxParams(asin, filterByStar, pageNumber, nextPageToken, refTag);
-
-    const pathsToTry = cachedWorkingAjaxPath
-      ? [cachedWorkingAjaxPath, ...AMAZON_AJAX_PATHS.filter((p) => p !== cachedWorkingAjaxPath)]
-      : AMAZON_AJAX_PATHS;
-
-    let lastError = null;
-    for (const path of pathsToTry) {
-      try {
-        const { response, url } = await tryAjaxCall(host, path, refTag, params);
-        if (response.ok) {
-          const text = await response.text();
-          // 応答が空 or エラーページではないか確認
-          if (text && text.length > 50) {
-            if (!cachedWorkingAjaxPath) {
-              cachedWorkingAjaxPath = path;
-              console.log(`[ReviewAI][AJAX] Using endpoint: ${path}`);
-            }
-            return text;
-          }
-          lastError = new Error(`Empty response from ${url}`);
-        } else {
-          lastError = new Error(`HTTP ${response.status} from ${url}`);
-          console.warn(`[ReviewAI][AJAX] ${path} returned ${response.status}`);
-        }
-      } catch (err) {
-        lastError = err;
-        console.warn(`[ReviewAI][AJAX] ${path} failed: ${err.message}`);
-      }
-    }
-
-    throw lastError || new Error('All AJAX endpoints failed');
-  }
-
-  // Amazon の AJAX レスポンス（&&&区切り）をパース
-  //   各チャンクは [action, selector, html] の形
-  function parseAmazonAjaxResponse(responseText) {
-    if (!responseText) return { reviewHtmls: [], paginationHtml: null, raw: [] };
-
-    // ロボット検知チェック
-    if (/robot|captcha|unusual\s*traffic/i.test(responseText)) {
+    if (!response.ok) throw new Error(`HTTP ${response.status} from ${url}`);
+    const html = await response.text();
+    if (BLOCKED_TEXT_PATTERNS.some((p) => html.includes(p))) {
       throw new Error('Amazon robot check detected');
     }
-
-    const chunks = responseText
-      .replace(/\n/g, '')
-      .split('&&&')
-      .map((c) => c.trim())
-      .filter((c) => c.length > 0);
-
-    const raw = [];
-    for (const chunk of chunks) {
-      try {
-        const parsed = JSON.parse(chunk);
-        if (Array.isArray(parsed) && parsed.length === 3) {
-          raw.push(parsed);
-        }
-      } catch (e) {
-        // 不正な JSON 行は無視
-      }
-    }
-
-    const reviewHtmls = raw
-      .filter((arr) => arr[0] === 'append'
-        && typeof arr[1] === 'string'
-        && arr[1].includes('cm_cr-review_list')
-        && typeof arr[2] === 'string'
-        && arr[2].includes('data-hook="review"'))
-      .map((arr) => arr[2]);
-
-    const paginationHtml = raw
-      .filter((arr) => arr[0] === 'update'
-        && typeof arr[1] === 'string'
-        && arr[1].includes('cm_cr-pagination_bar')
-        && typeof arr[2] === 'string')
-      .map((arr) => arr[2])
-      .join('');
-
-    return { reviewHtmls, paginationHtml, raw };
+    const parser = new DOMParser();
+    return parser.parseFromString(html, 'text/html');
   }
 
-  // pagination_bar HTML から nextPageToken を抽出
-  //   a[data-hook=show-more-button] の data-reviews-state-param 属性を JSON.parse
-  function extractNextPageToken(paginationHtml) {
-    if (!paginationHtml) return null;
-    try {
-      const root = parseHtmlFragment(paginationHtml);
-      const showMoreBtn = root.querySelector('a[data-hook="show-more-button"], [data-hook="show-more-button"]');
-      if (!showMoreBtn) return null;
-      const stateParam = showMoreBtn.getAttribute('data-reviews-state-param');
-      if (!stateParam) return null;
-      const state = JSON.parse(stateParam);
-      return state?.nextPageToken || null;
-    } catch (e) {
-      console.warn('[ReviewAI] Failed to parse nextPageToken:', e);
-      return null;
-    }
-  }
-
-  // 特定のスターフィルタで全ページのレビューを AJAX 経由で取得
-  async function fetchAllReviewsForStar(asin, filterByStar, onPage) {
+  // 全レビューを HTML ページ GET で順番に取得（最大 60 ページ = 600 件）
+  async function fetchAllReviews(asin, onPage) {
     const collected = [];
-    let nextPageToken = null;
-    const MAX_PAGES = 60; // 安全装置 (50 pages x 10 reviews = 500)
+    const MAX_PAGES = 60;
 
     for (let pageNumber = 1; pageNumber <= MAX_PAGES; pageNumber++) {
-      let responseText;
+      let doc;
       try {
-        responseText = await fetchReviewPageAjax(asin, filterByStar, pageNumber, nextPageToken);
+        doc = await fetchReviewPageHtml(asin, pageNumber);
       } catch (err) {
-        console.warn(`[ReviewAI][AJAX] page ${pageNumber} failed: ${err.message}`);
+        console.warn(`[ReviewAI] page ${pageNumber} failed: ${err.message}`);
         break;
       }
 
-      const { reviewHtmls, paginationHtml } = parseAmazonAjaxResponse(responseText);
+      const pageReviews = extractReviewsFromContainer(doc.body);
+      console.log(`[ReviewAI] page ${pageNumber}: extracted ${pageReviews.length} reviews (total ${collected.length + pageReviews.length})`);
 
-      if (reviewHtmls.length === 0) {
-        console.log(`[ReviewAI][AJAX] No more reviews for ${filterByStar} at page ${pageNumber}`);
-        break;
-      }
+      if (pageReviews.length === 0) break;
 
-      // 各 append チャンクの HTML を結合してパース
-      const root = parseHtmlFragment(reviewHtmls.join(''));
-      const pageReviews = extractReviewsFromContainer(root);
       collected.push(...pageReviews);
 
-      console.log(`[ReviewAI][AJAX] ${filterByStar} page ${pageNumber}: extracted ${pageReviews.length} reviews (total ${collected.length})`);
-
       if (typeof onPage === 'function') {
-        await onPage({ filterByStar, pageNumber, pageReviews, totalForStar: collected.length });
+        await onPage({ pageNumber, pageReviews, total: collected.length });
       }
 
-      // 次のページトークンを取得
-      const nextToken = extractNextPageToken(paginationHtml);
-      if (!nextToken) {
-        console.log(`[ReviewAI][AJAX] No nextPageToken after ${filterByStar} page ${pageNumber}. Stopping.`);
+      // 次ページリンクがなければ終了
+      const nextLink = doc.querySelector('.a-pagination .a-last:not(.a-disabled) a');
+      if (!nextLink) {
+        console.log(`[ReviewAI] No next page link after page ${pageNumber}. Done.`);
         break;
       }
-      nextPageToken = nextToken;
 
-      // Amazon への負荷を避けるため少し待つ
-      await new Promise((resolve) => setTimeout(resolve, 800 + Math.random() * 600));
+      await new Promise((resolve) => setTimeout(resolve, 1200 + Math.random() * 800));
     }
 
     return collected;
@@ -775,7 +631,7 @@
     if (!state || !state.collecting) return;
 
     const asin = extractAsin();
-    console.log(`[ReviewAI] Arrived at reviews page. Starting AJAX-based collection for ${asin}`);
+    console.log(`[ReviewAI] Arrived at reviews page. Starting HTML-fetch collection for ${asin}`);
 
     // 少し待って DOM が完全にロードされるのを待つ（Cookie 設定のため）
     await new Promise((resolve) => setTimeout(resolve, 1500));
@@ -817,71 +673,48 @@
     }
     console.log(`[ReviewAI] Initial page extraction: ${initialReviews.length} reviews (total ${state.reviews.length})`);
 
-    // 全スターフィルタを AJAX で順番に取得
-    // 'all' フィルタはカバレッジを広げるため別途処理しない（個別スターで網羅する方が正確）
-    const starFilters = ['five_star', 'four_star', 'three_star', 'two_star', 'one_star'];
+    // SellerSprite 方式: フィルタなしで全レビューを一括取得
+    state.phase = 'all';
+    state.currentPage = 1;
+    await saveCollectionState(state);
+    console.log(`[ReviewAI] Fetching all reviews via HTML page fetch...`);
 
-    for (const star of starFilters) {
-      if (!state.collecting) break;
-
-      state.phase = star;
-      state.currentPage = 1;
-      state.zeroNewPages = 0;
-      await saveCollectionState(state);
-
-      console.log(`[ReviewAI] Fetching ${star} via AJAX...`);
-
-      try {
-        const starReviews = await fetchAllReviewsForStar(asin, star, async ({ pageNumber, pageReviews, totalForStar }) => {
-          // 各ページ取得後に state に追加＋進捗通知
-          let addedCount = 0;
-          for (const review of pageReviews) {
-            const key = getReviewKey(review);
-            if (!seenKeys.has(key)) {
-              seenKeys.add(key);
-              state.reviews.push(review);
-              addedCount++;
-            }
+    try {
+      await fetchAllReviews(asin, async ({ pageNumber, pageReviews, total }) => {
+        let addedCount = 0;
+        for (const review of pageReviews) {
+          const key = getReviewKey(review);
+          if (!seenKeys.has(key)) {
+            seenKeys.add(key);
+            state.reviews.push(review);
+            addedCount++;
           }
-          state.currentPage = pageNumber;
-          state.displayTotalPages = Math.max(state.displayTotalPages || 1, pageNumber);
-          state.filterReviewCounts = {
-            ...(state.filterReviewCounts || {}),
-            [star]: totalForStar,
-          };
-          await saveCollectionState(state);
+        }
+        state.currentPage = pageNumber;
+        state.displayTotalPages = Math.max(state.displayTotalPages || 1, pageNumber);
+        await saveCollectionState(state);
 
-          console.log(`[ReviewAI][AJAX] ${star} page ${pageNumber}: added ${addedCount} (total ${state.reviews.length})`);
+        console.log(`[ReviewAI] page ${pageNumber}: added ${addedCount} (total ${state.reviews.length})`);
 
-          chrome.runtime.sendMessage({
-            type: 'COLLECTION_PROGRESS',
-            total: state.reviews.length,
-            currentPage: pageNumber,
-            currentFilter: getFilterLabel(star),
-            currentFilterKey: star,
-            textReviewCount: state.textReviewCount || 0,
-            targetReviewCount: state.targetReviewCount || 0,
-            totalRatings: state.productInfo?.totalReviews || 0,
-            addedCount,
-            maxPages: state.displayTotalPages || pageNumber,
-            zeroNewPages: 0,
-          }).catch(() => {});
-          reportProgressToServer(state);
-        });
-
-        console.log(`[ReviewAI][AJAX] ${star} complete: ${starReviews.length} reviews fetched`);
-      } catch (err) {
-        console.error(`[ReviewAI][AJAX] Failed to fetch ${star}:`, err);
-      }
-
-      state.completedFilters = Array.from(new Set([...(state.completedFilters || []), star]));
-      await saveCollectionState(state);
-
-      // フィルタ間で短い休憩
-      await new Promise((resolve) => setTimeout(resolve, 1500 + Math.random() * 1000));
+        chrome.runtime.sendMessage({
+          type: 'COLLECTION_PROGRESS',
+          total: state.reviews.length,
+          currentPage: pageNumber,
+          currentFilter: '全て',
+          currentFilterKey: 'all',
+          textReviewCount: state.textReviewCount || 0,
+          targetReviewCount: state.targetReviewCount || 0,
+          totalRatings: state.productInfo?.totalReviews || 0,
+          addedCount,
+          maxPages: state.displayTotalPages || pageNumber,
+        }).catch(() => {});
+        reportProgressToServer(state);
+      });
+    } catch (err) {
+      console.error(`[ReviewAI] Collection failed:`, err);
     }
 
-    console.log(`[ReviewAI] All filters complete. Total unique reviews: ${state.reviews.length}`);
+    console.log(`[ReviewAI] Collection complete. Total unique reviews: ${state.reviews.length}`);
     await finalizeCollection(state);
   }
 
