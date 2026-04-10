@@ -253,6 +253,7 @@
 
   // 全レビューを HTML ページ GET で順番に取得
   // startPage: ページ1はDOM取得済みのため通常は2から開始（最大 60 ページ = 600 件）
+  // onPage が true を返したらループを停止する
   async function fetchAllReviews(asin, onPage, startPage = 2) {
     const collected = [];
     const MAX_PAGES = 60;
@@ -277,7 +278,8 @@
       collected.push(...pageReviews);
 
       if (typeof onPage === 'function') {
-        await onPage({ pageNumber, pageReviews, total: collected.length });
+        const shouldStop = await onPage({ pageNumber, pageReviews, total: collected.length });
+        if (shouldStop) break;
       }
 
       await new Promise((resolve) => setTimeout(resolve, 1200 + Math.random() * 800));
@@ -678,6 +680,13 @@
 
     try {
       await fetchAllReviews(asin, async ({ pageNumber, pageReviews, total }) => {
+        // ユーザーが停止ボタンを押した場合
+        const freshState = await loadCollectionState();
+        if (!freshState?.collecting) {
+          console.log('[ReviewAI] Stop requested. Halting collection.');
+          return true; // ループ停止シグナル
+        }
+
         let addedCount = 0;
         for (const review of pageReviews) {
           const key = getReviewKey(review);
@@ -687,6 +696,13 @@
             addedCount++;
           }
         }
+
+        // 新規レビューが0件 = Amazon が同じページを繰り返し返している → 収集完了
+        if (addedCount === 0) {
+          console.log(`[ReviewAI] No new reviews on page ${pageNumber}. Collection complete.`);
+          return true; // ループ停止シグナル
+        }
+
         state.currentPage = pageNumber;
         state.displayTotalPages = Math.max(state.displayTotalPages || 1, pageNumber);
         await saveCollectionState(state);
@@ -706,6 +722,7 @@
           maxPages: state.displayTotalPages || pageNumber,
         }).catch(() => {});
         reportProgressToServer(state);
+        return false; // 継続
       });
     } catch (err) {
       console.error(`[ReviewAI] Collection failed:`, err);
