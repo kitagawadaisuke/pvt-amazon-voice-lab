@@ -1,6 +1,26 @@
 // Amazon Voice Lab Service Worker (Background Script)
 // Webダッシュボードと content.js の中継ハブ
 
+// content.js からの内部メッセージを受信（Amazon AJAX プロキシ用）
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type === 'AMAZON_AJAX_FETCH') {
+    handleAmazonAjaxFetch(message).then(sendResponse).catch((err) => {
+      sendResponse({ ok: false, error: err.message })
+    })
+    return true // 非同期応答のため
+  }
+})
+
+async function handleAmazonAjaxFetch({ url, options }) {
+  try {
+    const response = await fetch(url, options)
+    const text = await response.text()
+    return { ok: true, status: response.status, text }
+  } catch (err) {
+    return { ok: false, error: err.message || String(err) }
+  }
+}
+
 // Webダッシュボードからの外部メッセージを受信（externally_connectable）
 chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => {
   if (message.type === 'PING') {
