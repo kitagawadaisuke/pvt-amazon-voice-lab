@@ -23,22 +23,6 @@
       -webkit-background-clip: text;
       -webkit-text-fill-color: transparent;
     }
-    .settings-toggle {
-      background: none;
-      border: 1px solid #334155;
-      border-radius: 6px;
-      color: #94a3b8;
-      font-size: 16px;
-      width: 32px;
-      height: 32px;
-      padding: 0;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      transition: background 0.2s;
-    }
-    .settings-toggle:hover { background: #1e293b; }
     .status {
       padding: 8px 10px;
       border-radius: 6px;
@@ -120,28 +104,6 @@
       -webkit-background-clip: text;
       -webkit-text-fill-color: transparent;
     }
-    .settings-panel {
-      margin-top: 10px;
-      padding-top: 10px;
-      border-top: 1px solid #334155;
-      display: none;
-    }
-    .settings-panel.open { display: block; }
-    .settings-panel label {
-      font-size: 11px;
-      color: #94a3b8;
-      display: block;
-      margin-bottom: 3px;
-    }
-    .settings-panel input {
-      width: 100%;
-      padding: 6px 8px;
-      border-radius: 6px;
-      border: 1px solid #334155;
-      background: #1e293b;
-      color: #e2e8f0;
-      font-size: 12px;
-    }
     .note {
       font-size: 10px;
       color: #64748b;
@@ -153,7 +115,6 @@
 <body>
   <div class="header">
     <h1>Amazon Voice Lab</h1>
-    <button class="settings-toggle" id="settingsToggle" title="設定">&#9881;</button>
   </div>
 
   <div id="statusBox" class="status info">
@@ -181,32 +142,8 @@
 
   <button id="startBtn" class="btn-primary" style="display:none;">レビューを取得する</button>
   <button id="stopBtn" class="btn-stop" style="display:none;">取得を中止</button>
-  <button id="analyzeBtn" class="btn-analyze" style="display:none;">分析へ進む</button>
+  <button id="downloadBtn" class="btn-analyze" style="display:none;">CSVダウンロード</button>
   <button id="resetBtn" style="display:none; width:100%; padding:5px; border:1px solid #475569; border-radius:6px; background:transparent; color:#94a3b8; font-size:11px; cursor:pointer; margin-top:6px;">データをリセット</button>
-
-  <div class="settings-panel" id="settingsPanel">
-    <label>サーバーURL</label>
-    <input type="text" id="serverUrl" placeholder="http://localhost:3000" />
-
-    <div id="authSection" style="margin-top:10px;">
-      <div id="authLoggedOut" style="display:none;">
-        <button id="googleLoginBtn" class="btn-primary" style="font-size:12px; padding:7px;">Googleでログイン</button>
-      </div>
-      <div id="authLoggedIn" style="display:none; padding:6px; background:#1e293b; border-radius:6px; border:1px solid #334155;">
-        <div style="display:flex; justify-content:space-between; align-items:center;">
-          <div style="font-size:11px; color:#e2e8f0; word-break:break-all;" id="authEmail"></div>
-          <button id="logoutBtn" style="width:auto; padding:3px 8px; border:1px solid #475569; border-radius:4px; background:transparent; color:#94a3b8; font-size:10px; cursor:pointer; white-space:nowrap; margin-left:8px;">ログアウト</button>
-        </div>
-      </div>
-      <div id="authLoading" style="font-size:11px; color:#94a3b8;">認証確認中...</div>
-    </div>
-  </div>
-
-  <div style="margin-top:10px;">
-    <button id="openDashboardBtn" style="width:100%; padding:8px; border:1px solid #334155; border-radius:6px; background:#1e293b; color:#94a3b8; font-size:12px; cursor:pointer; transition:background 0.2s;">
-      Webダッシュボードで管理
-    </button>
-  </div>
 
   <div class="note">1商品ずつ取得してください</div>
 

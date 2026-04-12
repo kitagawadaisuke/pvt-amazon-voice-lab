@@ -906,8 +906,6 @@
       phase: nextState.phase,
     }).catch(() => {});
     reportProgressToServer(nextState);
-
-    await runAnalyzeFlow(nextState);
   }
 
   // storageからコレクション状態を読み込み

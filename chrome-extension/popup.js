@@ -1,4 +1,4 @@
-// ReviewAI Popup Script
+// Amazon Voice Lab Popup Script
 
 const statusBox = document.getElementById('statusBox');
 const productInfoDiv = document.getElementById('productInfo');
@@ -10,11 +10,8 @@ const progressFill = document.getElementById('progressFill');
 const progressText = document.getElementById('progressText');
 const startBtn = document.getElementById('startBtn');
 const stopBtn = document.getElementById('stopBtn');
-const analyzeBtn = document.getElementById('analyzeBtn');
-const serverUrlInput = document.getElementById('serverUrl');
-
-const SUPABASE_URL = 'https://ajujveerddffossdrwmr.supabase.co';
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFqdWp2ZWVyZGRmZm9zc2Ryd21yIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMzNjYwMjUsImV4cCI6MjA4ODk0MjAyNX0.CVJEqxgFpoW8D87zq8dYpWUYISvAKAKZUphFJ2YUy3Q';
+const downloadBtn = document.getElementById('downloadBtn');
+const resetBtn = document.getElementById('resetBtn');
 
 let currentTabId = null;
 let currentProductInfo = null;
@@ -27,92 +24,6 @@ function isAmazonPage(url) {
 function isSameProduct(left, right) {
   return !!left?.asin && !!right?.asin && left.asin === right.asin;
 }
-
-// 設定パネル開閉
-document.getElementById('settingsToggle').addEventListener('click', () => {
-  document.getElementById('settingsPanel').classList.toggle('open');
-});
-
-// 設定を読み込み
-chrome.storage.local.get(['serverUrl'], (result) => {
-  serverUrlInput.value = result.serverUrl || 'http://localhost:3000';
-});
-
-serverUrlInput.addEventListener('change', () => {
-  chrome.storage.local.set({ serverUrl: serverUrlInput.value });
-});
-
-// --- Google認証 ---
-function showAuthUI(state) {
-  const loading = document.getElementById('authLoading');
-  const loggedOut = document.getElementById('authLoggedOut');
-  const loggedIn = document.getElementById('authLoggedIn');
-  if (state === 'loading') {
-    loading.style.display = 'block';
-    loggedOut.style.display = 'none';
-    loggedIn.style.display = 'none';
-  } else if (state === 'loggedout') {
-    loading.style.display = 'none';
-    loggedOut.style.display = 'block';
-    loggedIn.style.display = 'none';
-  } else if (state === 'loggedin') {
-    loading.style.display = 'none';
-    loggedOut.style.display = 'none';
-    loggedIn.style.display = 'block';
-  }
-}
-
-async function checkAuthState() {
-  showAuthUI('loading');
-  const { accessToken, refreshToken, userEmail } = await new Promise((resolve) =>
-    chrome.storage.local.get(['accessToken', 'refreshToken', 'userEmail'], resolve)
-  );
-  if (accessToken && refreshToken) {
-    document.getElementById('authEmail').textContent = userEmail || '';
-    showAuthUI('loggedin');
-  } else {
-    showAuthUI('loggedout');
-  }
-}
-
-document.getElementById('googleLoginBtn').addEventListener('click', async () => {
-  const redirectUrl = chrome.identity.getRedirectURL();
-  const authUrl = `${SUPABASE_URL}/auth/v1/authorize?provider=google&redirect_to=${encodeURIComponent(redirectUrl)}`;
-  chrome.identity.launchWebAuthFlow({ url: authUrl, interactive: true }, async (responseUrl) => {
-    if (chrome.runtime.lastError || !responseUrl) {
-      setStatus('ログインに失敗しました', 'error');
-      showAuthUI('loggedout');
-      return;
-    }
-    const hash = responseUrl.split('#')[1] || '';
-    const params = new URLSearchParams(hash);
-    const accessToken = params.get('access_token');
-    const refreshToken = params.get('refresh_token');
-    if (!accessToken || !refreshToken) {
-      setStatus('トークン取得に失敗しました', 'error');
-      showAuthUI('loggedout');
-      return;
-    }
-    // メールアドレス取得
-    let userEmail = '';
-    try {
-      const res = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
-        headers: { Authorization: `Bearer ${accessToken}`, apikey: SUPABASE_ANON_KEY },
-      });
-      const data = await res.json();
-      userEmail = data.email || '';
-    } catch {}
-    chrome.storage.local.set({ accessToken, refreshToken, userEmail });
-    document.getElementById('authEmail').textContent = userEmail;
-    showAuthUI('loggedin');
-    setStatus('ログインしました', 'success');
-  });
-});
-
-document.getElementById('logoutBtn').addEventListener('click', () => {
-  chrome.storage.local.remove(['accessToken', 'refreshToken', 'userEmail']);
-  showAuthUI('loggedout');
-});
 
 // コレクション状態を確認
 async function checkCollectionStatus() {
@@ -143,7 +54,6 @@ async function init() {
     }
   }
 
-  // まずコレクション状態を確認
   const state = await checkCollectionStatus();
   const stateMatchesCurrentPage = isSameProduct(state?.productInfo, currentPageInfo);
 
@@ -158,27 +68,12 @@ async function init() {
     setStatus(state.blockReason || 'Amazon側のブロックを検知しました', 'error');
     resetBtn.style.display = 'block';
     startBtn.style.display = 'block';
-    analyzeBtn.style.display = currentCollectedReviews.length > 0 ? 'block' : 'none';
-    stopBtn.style.display = 'none';
-    return;
-  }
-
-  if (state && state.analyzing && (!onAmazonPage || stateMatchesCurrentPage)) {
-    currentProductInfo = state.productInfo;
-    currentCollectedReviews = state.reviews || [];
-    if (state.productInfo) showProductInfo(state.productInfo);
-    progressSection.style.display = 'block';
-    reviewCount.textContent = `${currentCollectedReviews.length}件`;
-    progressFill.style.width = '100%';
-    progressText.textContent = 'レビュー取得完了 / POX分析を自動実行中';
-    setStatus('POX分析を自動で実行しています。しばらくお待ちください', 'collecting');
-    resetBtn.style.display = 'none';
+    downloadBtn.style.display = currentCollectedReviews.length > 0 ? 'block' : 'none';
     stopBtn.style.display = 'none';
     return;
   }
 
   if (state && state.collecting && (!onAmazonPage || stateMatchesCurrentPage)) {
-    // 収集中
     currentProductInfo = state.productInfo;
     currentCollectedReviews = state.reviews || [];
     if (state.productInfo) showProductInfo(state.productInfo);
@@ -193,15 +88,15 @@ async function init() {
   }
 
   if (state && !state.collecting && state.reviews && state.reviews.length > 0 && (!onAmazonPage || stateMatchesCurrentPage)) {
-    // 収集完了済み
     currentProductInfo = state.productInfo;
     currentCollectedReviews = state.reviews || [];
     if (state.productInfo) showProductInfo(state.productInfo);
     progressSection.style.display = 'block';
     reviewCount.textContent = `${currentCollectedReviews.length}件`;
     progressFill.style.width = '100%';
-    progressText.textContent = 'レビュー取得完了 / レポート確認可能';
-    setStatus(`${state.reviews.length}件のレビュー取得とPOX分析が完了しています`, 'success');
+    progressText.textContent = 'レビュー取得完了';
+    setStatus(`${state.reviews.length}件のレビューを取得しました`, 'success');
+    downloadBtn.style.display = 'block';
     resetBtn.style.display = 'block';
     return;
   }
@@ -210,6 +105,7 @@ async function init() {
     progressSection.style.display = 'none';
     resetBtn.style.display = 'none';
     stopBtn.style.display = 'none';
+    downloadBtn.style.display = 'none';
     if (currentPageInfo.totalReviews > 0) {
       setStatus(`レビュー ${currentPageInfo.totalReviews}件 取得可能`, 'info');
       startBtn.style.display = 'block';
@@ -224,19 +120,15 @@ async function init() {
     return;
   }
 
-  try {
-    if (currentPageInfo) {
-      if (currentPageInfo.totalReviews > 0) {
-        setStatus(`レビュー ${currentPageInfo.totalReviews}件 取得可能`, 'info');
-        startBtn.style.display = 'block';
-      } else {
-        setStatus('この商品にはレビューがありません', 'info');
-      }
+  if (currentPageInfo) {
+    if (currentPageInfo.totalReviews > 0) {
+      setStatus(`レビュー ${currentPageInfo.totalReviews}件 取得可能`, 'info');
+      startBtn.style.display = 'block';
     } else {
-      setStatus('Amazon商品ページを開いてください', 'info');
+      setStatus('この商品にはレビューがありません', 'info');
     }
-  } catch {
-    setStatus('ページを再読み込みしてからお試しください', 'error');
+  } else {
+    setStatus('Amazon商品ページを開いてください', 'info');
   }
 }
 
@@ -250,7 +142,6 @@ function showProductInfo(info) {
   productTitle.textContent = info.title.substring(0, 60) + (info.title.length > 60 ? '...' : '');
   productAsin.textContent = `ASIN: ${info.asin} | ★${info.rating}`;
 
-  // 評価数の内訳を表示
   const breakdownDiv = document.getElementById('reviewBreakdown');
   const totalRatingsEl = document.getElementById('totalRatings');
   breakdownDiv.style.display = 'flex';
@@ -258,12 +149,13 @@ function showProductInfo(info) {
 }
 
 // レビュー取得開始
-  startBtn.addEventListener('click', async () => {
+startBtn.addEventListener('click', async () => {
   startBtn.style.display = 'none';
   stopBtn.style.display = 'block';
   resetBtn.style.display = 'none';
+  downloadBtn.style.display = 'none';
   progressSection.style.display = 'block';
-  setStatus('レビューページに移動中... 取得完了まで画面を操作しないでください', 'collecting');
+  setStatus('レビュー取得中...', 'collecting');
 
   try {
     await chrome.storage.local.remove(['reviewai_state']);
@@ -280,7 +172,6 @@ stopBtn.addEventListener('click', async () => {
   try {
     await chrome.tabs.sendMessage(currentTabId, { type: 'STOP_COLLECTION' });
   } catch {
-    // タブが遷移中の場合はstorageを直接クリア
     chrome.storage.local.remove(['reviewai_state']);
   }
   stopBtn.style.display = 'none';
@@ -288,19 +179,58 @@ stopBtn.addEventListener('click', async () => {
   startBtn.style.display = 'block';
 });
 
-// 分析実行
-analyzeBtn.addEventListener('click', async () => {
-  analyzeBtn.disabled = true;
-  analyzeBtn.textContent = '分析中...';
-  setStatus('POX分析を実行しています。しばらくお待ちください', 'collecting');
-  try {
-    await chrome.tabs.sendMessage(currentTabId, { type: 'START_ANALYSIS' });
-  } catch {
-    setStatus('分析に失敗しました。ページを再読み込みしてください', 'error');
-    analyzeBtn.disabled = false;
-    analyzeBtn.textContent = '分析へ進む';
+// CSVダウンロード
+downloadBtn.addEventListener('click', async () => {
+  const state = await checkCollectionStatus();
+  if (!state || !state.reviews || state.reviews.length === 0) {
+    setStatus('ダウンロードするレビューがありません', 'error');
+    return;
   }
+
+  const asin = state.productInfo?.asin || 'unknown';
+  const reviews = state.reviews;
+  const today = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+
+  // CSV ヘッダー
+  const headers = [
+    'ASIN', 'タイトル', '内容', '星評価', '日付', 'レビューアー', '認証購入者',
+    '役に立つ数', 'レビューID',
+  ];
+
+  // CSV 行を生成
+  const rows = reviews.map((r) => [
+    asin,
+    csvEscape(r.title || ''),
+    csvEscape(r.body || ''),
+    r.rating || '',
+    r.date || '',
+    csvEscape(r.author || ''),
+    r.verified ? 'Yes' : 'No',
+    r.helpfulVotes || 0,
+    r.id || '',
+  ]);
+
+  // BOM 付き UTF-8 CSV を生成（Excel で日本語が文字化けしないよう）
+  const bom = '\uFEFF';
+  const csvContent = bom + [headers.join(','), ...rows.map((row) => row.join(','))].join('\n');
+
+  // ダウンロード
+  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${asin}-JP-Reviews-${today}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+
+  setStatus(`${reviews.length}件のレビューをCSVでダウンロードしました`, 'success');
 });
+
+function csvEscape(str) {
+  if (!str) return '""';
+  const escaped = str.replace(/"/g, '""').replace(/\n/g, ' ').replace(/\r/g, '');
+  return `"${escaped}"`;
+}
 
 // storage変更を監視して状態を同期
 chrome.storage.onChanged.addListener((changes, areaName) => {
@@ -313,12 +243,7 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
     reviewCount.textContent = `${state.reviews.length}件`;
     progressFill.style.width = `${pct}%`;
     progressSection.style.display = 'block';
-  } else if (state.analyzing) {
-    analyzeBtn.style.display = 'block';
-    analyzeBtn.disabled = true;
-    analyzeBtn.textContent = '分析中...';
-    stopBtn.style.display = 'none';
-  } else if (!state.collecting && !state.analyzing && state.reviews?.length > 0) {
+  } else if (!state.collecting && state.reviews?.length > 0) {
     reviewCount.textContent = `${state.reviews.length}件`;
     progressFill.style.width = '100%';
   }
@@ -332,16 +257,13 @@ chrome.runtime.onMessage.addListener((msg) => {
     const pct = Math.min((msg.total / progressBase) * 100, 100);
     progressFill.style.width = `${pct}%`;
     progressText.textContent = `${msg.currentFilter} - ページ${msg.currentPage}/${msg.maxPages}`;
-    setStatus('レビュー取得中... ページを操作しないでください', 'collecting');
+    setStatus('レビュー取得中...', 'collecting');
   }
 
   if (msg.type === 'TEXT_REVIEW_COUNT') {
     const textReviewsEl = document.getElementById('textReviews');
     textReviewsEl.textContent = `${msg.textReviewCount}件`;
     textReviewsEl.style.color = msg.textReviewCount < 10 ? '#ef4444' : '#3b82f6';
-    if (msg.textReviewCount < 10) {
-      setStatus(`コメント付きレビューが${msg.textReviewCount}件しかありません。分析精度が低くなる可能性があります`, 'error');
-    }
   }
 
   if (msg.type === 'COLLECTION_COMPLETE') {
@@ -349,9 +271,10 @@ chrome.runtime.onMessage.addListener((msg) => {
     stopBtn.style.display = 'none';
     reviewCount.textContent = `${currentCollectedReviews.length}件`;
     progressFill.style.width = '100%';
-    progressText.textContent = 'レビュー取得完了 / POX分析を自動実行中';
-    setStatus(`${currentCollectedReviews.length}件のレビューを取得しました。自動でPOX分析を開始しています`, 'collecting');
-    resetBtn.style.display = 'none';
+    progressText.textContent = 'レビュー取得完了';
+    setStatus(`${currentCollectedReviews.length}件のレビューを取得しました`, 'success');
+    downloadBtn.style.display = 'block';
+    resetBtn.style.display = 'block';
     currentProductInfo = msg.productInfo;
   }
 
@@ -361,53 +284,18 @@ chrome.runtime.onMessage.addListener((msg) => {
     startBtn.style.display = 'block';
     setStatus(msg.reason || 'Amazon側のアクセス制限を検知しました', 'error');
   }
-  if (msg.type === 'ANALYSIS_STARTED') {
-    progressText.textContent = 'POX分析を実行中';
-    setStatus('POX分析を実行しています。しばらくお待ちください', 'collecting');
-    analyzeBtn.style.display = 'block';
-    analyzeBtn.disabled = true;
-    analyzeBtn.textContent = '分析中...';
-    stopBtn.style.display = 'none';
-    resetBtn.style.display = 'none';
-  }
-
-  if (msg.type === 'ANALYSIS_COMPLETE') {
-    progressText.textContent = 'POX分析完了 / レポートを表示しました';
-    setStatus('POX分析が完了しました。ダッシュボードを開いています', 'success');
-    analyzeBtn.style.display = 'none';
-    resetBtn.style.display = 'block';
-  }
-
-  if (msg.type === 'ANALYSIS_FAILED') {
-    progressText.textContent = 'POX分析に失敗';
-    setStatus(`POX分析に失敗しました: ${msg.error || 'unknown error'}`, 'error');
-    analyzeBtn.style.display = 'block';
-    analyzeBtn.disabled = false;
-    analyzeBtn.textContent = '分析を再実行';
-    resetBtn.style.display = 'block';
-  }
 });
 
 // データリセット
-const resetBtn = document.getElementById('resetBtn');
 resetBtn.addEventListener('click', () => {
   chrome.storage.local.remove(['reviewai_state'], () => {
     setStatus('データをリセットしました', 'info');
     progressSection.style.display = 'none';
     stopBtn.style.display = 'none';
-    analyzeBtn.style.display = 'none';
+    downloadBtn.style.display = 'none';
     resetBtn.style.display = 'none';
     startBtn.style.display = 'block';
   });
 });
 
-document.getElementById('openDashboardBtn').addEventListener('click', async () => {
-  const { serverUrl } = await new Promise((resolve) =>
-    chrome.storage.local.get(['serverUrl'], resolve)
-  );
-  const url = (serverUrl || 'http://localhost:3000').replace(/\/$/, '');
-  window.open(`${url}/dashboard`, '_blank', 'noopener,noreferrer');
-});
-
-checkAuthState();
 init();
