@@ -191,16 +191,6 @@
     return reviews;
   }
 
-  function extractReviewsFromCurrentPage() {
-    return extractReviewsFromContainer(document);
-  }
-
-  function parseHtmlFragment(html) {
-    const parser = new DOMParser();
-    const doc = parser.parseFromString(`<!DOCTYPE html><html><body>${html}</body></html>`, 'text/html');
-    return doc.body;
-  }
-
   function extractReviewTitle(reviewEl) {
     const titleSpans = Array.from(
       reviewEl.querySelectorAll('[data-hook="review-title"] span, .review-title-content span')
@@ -221,23 +211,6 @@
   // レビューページかどうか
   function isReviewsPage() {
     return window.location.href.includes('/product-reviews/');
-  }
-
-  function buildReviewPageUrl(asin, pageNumber, filterByStar) {
-    // Amazon は pageNumber クエリを無視することがあるため、/ref=.../ 付きパスを使う
-    const refPath = pageNumber > 1
-      ? `/ref=cm_cr_arp_d_paging_btm_next_${pageNumber}`
-      : `/ref=cm_cr_arp_d_paging_btm_prev_1`;
-    const url = new URL(`https://${window.location.hostname}/product-reviews/${asin}${refPath}`);
-    url.searchParams.set('ie', 'UTF8');
-    url.searchParams.set('pageNumber', String(pageNumber));
-    url.searchParams.set('pageSize', '10');
-    url.searchParams.set('sortBy', 'recent');
-    url.searchParams.set('reviewerType', 'all_reviews');
-    if (filterByStar && filterByStar !== 'all') {
-      url.searchParams.set('filterByStar', filterByStar);
-    }
-    return url.toString();
   }
 
   // SellerSprite と完全に同じ方式:
@@ -294,20 +267,6 @@
     return { doc, csrfToken, totalReviews, html };
   }
 
-  // background script (service worker) 経由で fetch を実行
-  // content.js の fetch だと Amazon に CORS/oriフンで弾かれるが、
-  // background は extension の権限で動くので制限を受けない
-  async function fetchInPageContext(url, options) {
-    const response = await chrome.runtime.sendMessage({
-      type: 'AMAZON_AJAX_FETCH',
-      url,
-      options,
-    });
-    if (!response || !response.ok) {
-      throw new Error(response?.error || 'background fetch failed');
-    }
-    return { status: response.status, text: response.text };
-  }
 
   // SellerSprite の fPost を完全再現: XMLHttpRequest でシンプルに POST
   function amazonXhrPost(url, body, headers) {
@@ -423,113 +382,7 @@
     return { doc, nextPageToken: nextToken };
   }
 
-  function getAntiCsrfToken() {
-    // 1) meta タグ
-    const meta = document.querySelector('meta[name="anti-csrftoken-a2z"]');
-    if (meta) {
-      const v = meta.getAttribute('content');
-      if (v) {
-        console.log('[ReviewAI] CSRF token from meta tag');
-        return v;
-      }
-    }
-
-    // 2) input[name="anti-csrftoken-a2z"]
-    const input = document.querySelector('input[name="anti-csrftoken-a2z"]');
-    if (input?.value) {
-      console.log('[ReviewAI] CSRF token from input');
-      return input.value;
-    }
-
-    // 3) script 内の様々なパターン
-    const scripts = document.querySelectorAll('script');
-    const patterns = [
-      /["']anti-csrftoken-a2z["']\s*:\s*["']([^"']+)["']/,
-      /anti-csrftoken-a2z=([A-Za-z0-9%+/=_-]+)/,
-      /CSRF_TOKEN["'\s:=]+["']([^"']+)["']/,
-    ];
-    for (const s of scripts) {
-      const text = s.textContent || '';
-      for (const re of patterns) {
-        const m = text.match(re);
-        if (m && m[1]) {
-          console.log('[ReviewAI] CSRF token from script');
-          return m[1];
-        }
-      }
-    }
-
-    // 4) 全リンク・要素のdata属性から探す
-    const dataEls = document.querySelectorAll('[data-anti-csrftoken-a2z]');
-    if (dataEls.length > 0) {
-      const v = dataEls[0].getAttribute('data-anti-csrftoken-a2z');
-      if (v) {
-        console.log('[ReviewAI] CSRF token from data attribute');
-        return v;
-      }
-    }
-
-    console.warn('[ReviewAI] CSRF token NOT FOUND. The 403 will likely occur.');
-    return null;
-  }
-
-  // 非表示 iframe を生成し、指定 URL をロードする
-  // 既存 iframe を再利用する場合は iframe を渡す
-  async function loadIframeUrl(iframe, url, timeoutMs = 25000) {
-    return new Promise((resolve, reject) => {
-      let settled = false;
-      const onLoad = () => {
-        if (settled) return;
-        // load 後、JS で DOM が組み立てられるまで少し待つ
-        setTimeout(() => {
-          if (settled) return;
-          settled = true;
-          iframe.removeEventListener('load', onLoad);
-          try {
-            const doc = iframe.contentDocument;
-            if (!doc) {
-              reject(new Error('iframe contentDocument is null'));
-              return;
-            }
-            resolve(doc);
-          } catch (err) {
-            reject(err);
-          }
-        }, 1500);
-      };
-
-      const timer = setTimeout(() => {
-        if (settled) return;
-        settled = true;
-        iframe.removeEventListener('load', onLoad);
-        reject(new Error(`iframe load timeout: ${url}`));
-      }, timeoutMs);
-
-      iframe.addEventListener('load', () => {
-        clearTimeout(timer);
-        onLoad();
-      });
-
-      iframe.src = url;
-    });
-  }
-
-  function createHiddenIframe() {
-    const iframe = document.createElement('iframe');
-    iframe.style.cssText = 'position:fixed;left:-99999px;top:-99999px;width:1280px;height:900px;visibility:hidden;border:0;';
-    iframe.setAttribute('aria-hidden', 'true');
-    iframe.setAttribute('tabindex', '-1');
-    document.body.appendChild(iframe);
-    return iframe;
-  }
-
-  function findNextPageLinkInDoc(doc) {
-    return doc.querySelector('.a-pagination .a-last:not(.a-disabled) a, li.a-last:not(.a-disabled) a');
-  }
-
-  // 指定フィルタのレビューを iframe 内で実際にナビゲートしながら取得
-  // Amazon の URL 直 fetch では pageNumber が無視されるため、
-  // ページ内の「次へ」リンクを実際にクリックして次ページに遷移する
+  // 指定フィルタのレビューを SellerSprite と同じ AJAX 方式で取得
   async function fetchReviewsForFilter(asin, filterByStar, onPage) {
     // SellerSprite と完全同一の方式:
     // Step1: /product-reviews/ を HTML で取得 → #cr-state-object からトークンを取得
