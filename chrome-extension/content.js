@@ -536,7 +536,6 @@
       reason,
       total: nextState.reviews.length,
     }).catch(() => {});
-    reportProgressToServer(nextState);
   }
 
   async function finalizeCollection(state) {
@@ -553,7 +552,6 @@
       textReviewCount: nextState.textReviewCount || 0,
       phase: nextState.phase,
     }).catch(() => {});
-    reportProgressToServer(nextState);
   }
 
   // storageからコレクション状態を読み込み
@@ -694,7 +692,6 @@
           addedCount,
           maxPages: 10,
         }).catch(() => {});
-        reportProgressToServer(state);
         return false;
       });
     } catch (err) {
@@ -742,7 +739,6 @@
           addedCount,
           maxPages: 10,
         }).catch(() => {});
-        reportProgressToServer(state);
         return false;
       });
     } catch (err) {
